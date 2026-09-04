@@ -18,6 +18,8 @@ export struct Tool {
 
 export component MainWindow inherits Window {
     title: "protonctx";
+    // Window/taskbar icon (SVG), embedded in the binary via EmbedFiles.
+    icon: @image-url("icon/icon.svg");
 
     // The installed games table, supplied from Rust.
     in-out property <[GameInfo]> games: [];
@@ -187,6 +189,7 @@ export component SettingsDialog inherits Dialog {
 // About dialog with version info.
 export component AboutDialog inherits Dialog {
     title: "About protonctx";
+    icon: @image-url("icon/icon.svg");
     in property <string> about-text: "";
     preferred-width: 380px;
     preferred-height: 200px;
