@@ -1,0 +1,224 @@
+// Copyright (C) 2026 protonctx contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
+import { Button, HorizontalBox, ListView, Palette, ScrollView, VerticalBox } from "std-widgets.slint";
+
+// Display-only row model, mirroring `models::Game` (subset of fields the UI needs).
+export struct GameInfo {
+    name: string,
+    app-id: string,
+    compat-tool: string,
+}
+
+// A built-in Wine tool shown as a button in the action bar.
+export struct Tool {
+    label: string,
+    arg: string,
+}
+
+export component MainWindow inherits Window {
+    title: "protonctx";
+
+    // The installed games table, supplied from Rust.
+    in-out property <[GameInfo]> games: [];
+
+    // Built-in tool buttons, supplied from Rust.
+    in property <[Tool]> tools: [];
+
+    // Index of the selected row, or -1 when nothing is selected.
+    in-out property <int> selected-index: -1;
+
+    // About dialog text, supplied from Rust (version + short description).
+    in property <string> about-text: "";
+
+    // Callbacks wired in Rust.
+    callback select-game(int);
+    callback browse-exe();
+    callback launch-tool(string);
+
+    width: 720px;
+    height: 480px;
+
+    MenuBar {
+        Menu {
+            title: "Settings";
+            MenuItem {
+                title: "Preferences…";
+                activated => {
+                    settings-popup.show();
+                }
+            }
+        }
+        Menu {
+            title: "About";
+            MenuItem {
+                title: "About protonctx";
+                activated => {
+                    about-popup.show();
+                }
+            }
+        }
+    }
+
+    VerticalBox {
+        padding: 0px;
+
+        // Column header row.
+        HorizontalBox {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+
+            header-name := Text {
+                text: "Game";
+                horizontal-stretch: 1;
+                font-weight: 700;
+            }
+            header-id := Text {
+                text: "App ID";
+                width: 100px;
+                font-weight: 700;
+            }
+            header-tool := Text {
+                text: "Compatibility Tool";
+                horizontal-stretch: 1;
+                font-weight: 700;
+            }
+            // Spacer for the Select button column.
+            Text {
+                width: 90px;
+            }
+        }
+
+        // Game rows.
+        ScrollView {
+            ListView {
+                for game[idx] in root.games: Rectangle {
+                    background: idx == root.selected-index ? Palette.accent-background.with-alpha(0.15) : Colors.transparent;
+
+                    HorizontalBox {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+
+                        Text {
+                            text: game.name;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: game.app-id;
+                            width: 100px;
+                        }
+                        Text {
+                            text: game.compat-tool;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Button {
+                            text: "Select";
+                            width: 90px;
+                            clicked => {
+                                root.select-game(idx);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Action bar (enabled only when a game is selected).
+        HorizontalBox {
+            padding-left: 12px;
+            padding-right: 12px;
+            padding-top: 8px;
+            padding-bottom: 8px;
+            alignment: start;
+
+            Button {
+                text: "Browse…";
+                enabled: root.selected-index >= 0;
+                clicked => {
+                    root.browse-exe();
+                }
+            }
+
+            for tool in root.tools: Button {
+                text: tool.label;
+                enabled: root.selected-index >= 0;
+                clicked => {
+                    root.launch-tool(tool.arg);
+                }
+            }
+        }
+    }
+
+    // Settings placeholder popup (empty for now; will be expanded later).
+    settings-popup := PopupWindow {
+        width: 360px;
+        height: 180px;
+        close-policy: PopupClosePolicy.close-on-click-outside;
+
+        Rectangle {
+            background: Palette.background;
+            border-color: Palette.border;
+            border-width: 1px;
+            border-radius: 4px;
+
+            VerticalBox {
+                Text {
+                    text: "Settings";
+                    font-weight: 700;
+                }
+                Text {
+                    text: "Nothing to configure yet.";
+                }
+                HorizontalBox {
+                    alignment: end;
+                    Button {
+                        text: "Close";
+                        clicked => {
+                            settings-popup.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // About dialog with version info.
+    about-popup := PopupWindow {
+        width: 380px;
+        height: 200px;
+        close-policy: PopupClosePolicy.close-on-click-outside;
+
+        Rectangle {
+            background: Palette.background;
+            border-color: Palette.border;
+            border-width: 1px;
+            border-radius: 4px;
+
+            VerticalBox {
+                Text {
+                    text: "About protonctx";
+                    font-weight: 700;
+                }
+                Text {
+                    text: root.about-text;
+                    wrap: word-wrap;
+                }
+                HorizontalBox {
+                    alignment: end;
+                    Button {
+                        text: "Close";
+                        clicked => {
+                            about-popup.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

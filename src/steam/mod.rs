@@ -1,0 +1,137 @@
+//! Steam discovery: locate the Steam installation, its library folders, installed apps,
+//! and the compatibility tool each app runs with.
+//!
+//! Data sources (all read-only, parsed with `steam-vdf-parser`):
+//! - `libraryfolders.vdf`  → library folder paths + which appids are installed where
+//! - `appmanifest_<id>.acf` → installed app name + install dir
+//! - `config.vdf`          → per-app compatibility tool mapping (`CompatToolMapping`)
+//! - `compatdata/<id>/config_info` → authoritative Proton directory for a prefix
+
+pub mod compat;
+pub mod compatdata;
+pub mod libraryfolders;
+pub mod locations;
+pub mod manifest;
+
+use crate::models::Game;
+
+/// Read-only error type for Steam discovery failures.
+#[derive(Debug)]
+pub enum SteamError {
+    Io(std::io::Error),
+    Parse(String),
+}
+
+impl std::fmt::Display for SteamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SteamError::Io(e) => write!(f, "I/O error: {e}"),
+            SteamError::Parse(msg) => write!(f, "parse error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SteamError {}
+
+impl From<std::io::Error> for SteamError {
+    fn from(e: std::io::Error) -> Self {
+        SteamError::Io(e)
+    }
+}
+
+/// Steam App ID for "Steamworks Common Redistributables", a shared non-game payload.
+const STEAMWORKS_COMMON_REDISTRIBUTABLES_APPID: u32 = 228980;
+
+/// Whether an install directory belongs to a Proton compatibility tool or a Steam
+/// runtime (rather than a game). These ship a `toolmanifest.vdf` (Proton, runtimes)
+/// or `compatibilitytool.vdf` (custom tools like GE-Proton) in their directory.
+fn is_compat_tool(install_dir: &std::path::Path) -> bool {
+    install_dir.join("toolmanifest.vdf").is_file()
+        || install_dir.join("compatibilitytool.vdf").is_file()
+}
+
+/// Discover the installed Steam games across all library folders.
+///
+/// Returns an empty list (never an error) if Steam cannot be located — the GUI
+/// should simply show an empty table in that case.
+pub fn discover_games() -> Vec<Game> {
+    let Some(steam_root) = locations::find_steam_root() else {
+        eprintln!("protonctx: could not locate a Steam installation");
+        return Vec::new();
+    };
+
+    let libraries = match libraryfolders::library_folders(&steam_root) {
+        Ok(libs) if !libs.is_empty() => libs,
+        // Fall back to the default library under the Steam root.
+        _ => {
+            let default = steam_root.join("steamapps");
+            if default.join("libraryfolders.vdf").is_file() {
+                vec![default]
+            } else {
+                Vec::new()
+            }
+        }
+    };
+
+    let compat_tools = compat::compat_tool_map(&steam_root);
+
+    let mut games = Vec::new();
+    for library in &libraries {
+        let apps = match manifest::installed_apps(library) {
+            Ok(apps) => apps,
+            Err(e) => {
+                eprintln!("protonctx: failed to read manifests in {library:?}: {e}");
+                continue;
+            }
+        };
+
+        for app in apps {
+            // Only include actual games. Steam installs several non-game "apps" in
+            // the same manifests that we must filter out:
+            //   - Compatibility tools (Proton, GE-Proton): marked by toolmanifest.vdf
+            //     or compatibilitytool.vdf in their install directory.
+            //   - Steam Linux Runtimes: marked by toolmanifest.vdf + VERSIONS.txt.
+            //   - Steamworks Common Redistributables (appid 228980): shared payload.
+            let Some(install_dir) = app.install_dir else {
+                continue;
+            };
+            let common = library.join("steamapps").join("common").join(&install_dir);
+            if !common.is_dir() {
+                continue;
+            }
+            if is_compat_tool(&common) {
+                continue;
+            }
+            if app.app_id == STEAMWORKS_COMMON_REDISTRIBUTABLES_APPID {
+                continue;
+            }
+
+            let compat_tool = compat_tools
+                .get(&app.app_id.to_string())
+                .cloned()
+                .unwrap_or_default();
+
+            let proton_dir = compatdata::proton_dir_for(library, app.app_id)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            games.push(Game {
+                name: app.name,
+                app_id: app.app_id,
+                compat_tool,
+                library_path: library.to_string_lossy().into_owned(),
+                proton_dir,
+            });
+        }
+    }
+
+    // Deterministic order for a stable UI.
+    games.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then(a.app_id.cmp(&b.app_id))
+    });
+
+    games
+}
