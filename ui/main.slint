@@ -1,7 +1,7 @@
 // Copyright (C) 2026 protonctx contributors
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { Button, HorizontalBox, StandardTableView, VerticalBox } from "std-widgets.slint";
+import { Button, GroupBox, HorizontalBox, StandardTableView, VerticalBox } from "std-widgets.slint";
 
 // Dialogs live in their own files for maintainability. Importing them keeps them
 // part of the compiled UI and re-exported to Rust via include_modules!.
@@ -53,8 +53,8 @@ export component MainWindow inherits Window {
     // resizable and exposes native maximize/minimize controls.
     preferred-width: 720px;
     preferred-height: 480px;
-    min-width: 480px;
-    min-height: 320px;
+    min-width: 720px;
+    min-height: 480px;
 
     MenuBar {
         Menu {
@@ -78,31 +78,37 @@ export component MainWindow inherits Window {
     }
 
     VerticalBox {
-        padding: 0px;
+        padding: 8px;
 
-        StandardTableView {
-            // 3 data columns, all sortable. Selection happens by clicking a row
-            // (current-row), so no dedicated Select button is needed.
-            columns: [
-                { title: "Game", horizontal-stretch: 1 },
-                { title: "App ID" },
-                { title: "Compatibility Tool", horizontal-stretch: 1 },
-            ];
-            rows: TableAdapter.sort(TableAdapter.rows, root.sort-index, root.sort-ascending);
+        GroupBox {
+            title: "Installed Steam Games";
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
 
-            sort-ascending(index) => {
-                root.sort-index = index;
-                root.sort-ascending = true;
-            }
-            sort-descending(index) => {
-                root.sort-index = index;
-                root.sort-ascending = false;
-            }
+            StandardTableView {
+                // 3 data columns, all sortable. Selection happens by clicking a row
+                // (current-row), so no dedicated Select button is needed.
+                columns: [
+                    { title: "Game", horizontal-stretch: 1 },
+                    { title: "App ID", horizontal-stretch: 1 },
+                    { title: "Compatibility Tool", horizontal-stretch: 1 },
+                ];
+                rows: TableAdapter.sort(TableAdapter.rows, root.sort-index, root.sort-ascending);
 
-            current-row-changed(index) => {
-                root.selected-index = index;
+                sort-ascending(index) => {
+                    root.sort-index = index;
+                    root.sort-ascending = true;
+                }
+                sort-descending(index) => {
+                    root.sort-index = index;
+                    root.sort-ascending = false;
+                }
+
+                current-row-changed(index) => {
+                    root.selected-index = index;
+                }
+                current-row <=> root.selected-index;
             }
-            current-row <=> root.selected-index;
         }
 
         // Action bar (enabled only when a game is selected).
