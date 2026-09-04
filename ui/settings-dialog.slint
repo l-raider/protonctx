@@ -1,0 +1,30 @@
+// Copyright (C) 2026 protonctx contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
+import { Button, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+// Placeholder settings dialog; will be expanded with actual settings later.
+export component SettingsDialog inherits Dialog {
+    title: "Settings";
+    icon: @image-url("icon/icon.svg");
+    preferred-width: 360px;
+    preferred-height: 180px;
+    min-width: 360px;
+    min-height: 180px;
+
+    VerticalBox {
+        padding: 16px;
+        Text {
+            text: "TODO";
+        }
+        HorizontalBox {
+            alignment: end;
+            Button {
+                text: "Close";
+                clicked => {
+                    root.hide();
+                }
+            }
+        }
+    }
+}

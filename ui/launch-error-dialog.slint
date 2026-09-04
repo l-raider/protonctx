@@ -1,0 +1,34 @@
+// Copyright (C) 2026 protonctx contributors
+// SPDX-License-Identifier: GPL-3.0-only
+
+import { Button, HorizontalBox, Palette, VerticalBox } from "std-widgets.slint";
+
+// Error dialog shown when launching an executable fails (e.g. no Proton prefix yet).
+// Follows the style of typical KDE error dialogs: message text plus a single close button.
+export component LaunchErrorDialog inherits Dialog {
+    title: "Launch Error";
+    icon: @image-url("icon/icon.svg");
+    in property <string> error-message: "";
+    preferred-width: 420px;
+    preferred-height: 160px;
+    min-width: 420px;
+    min-height: 160px;
+
+    VerticalBox {
+        padding: 16px;
+        Text {
+            text: root.error-message;
+            wrap: word-wrap;
+            color: Palette.foreground;
+        }
+        HorizontalBox {
+            alignment: end;
+            Button {
+                text: "Close";
+                clicked => {
+                    root.hide();
+                }
+            }
+        }
+    }
+}

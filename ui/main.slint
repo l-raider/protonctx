@@ -3,6 +3,15 @@
 
 import { Button, HorizontalBox, ListView, Palette, ScrollView, VerticalBox } from "std-widgets.slint";
 
+// Dialogs live in their own files for maintainability. Importing them keeps them
+// part of the compiled UI and re-exported to Rust via include_modules!.
+import { SettingsDialog } from "settings-dialog.slint";
+import { AboutDialog } from "about-dialog.slint";
+import { LaunchErrorDialog } from "launch-error-dialog.slint";
+
+// Re-export the dialogs so the Rust code (slint::include_modules!) can construct them.
+export { SettingsDialog, AboutDialog, LaunchErrorDialog }
+
 // Display-only row model, mirroring `models::Game` (subset of fields the UI needs).
 export struct GameInfo {
     name: string,
@@ -155,59 +164,6 @@ export component MainWindow inherits Window {
                 enabled: root.selected-index >= 0;
                 clicked => {
                     root.launch-tool(tool.arg);
-                }
-            }
-        }
-    }
-}
-
-// Settings dialog (placeholder for now; will be expanded later).
-export component SettingsDialog inherits Dialog {
-    title: "Settings";
-    preferred-width: 360px;
-    preferred-height: 180px;
-    min-width: 360px;
-    min-height: 180px;
-
-    VerticalBox {
-        padding: 16px;
-        Text {
-            text: "Nothing to configure yet.";
-        }
-        HorizontalBox {
-            alignment: end;
-            Button {
-                text: "Close";
-                clicked => {
-                    root.hide();
-                }
-            }
-        }
-    }
-}
-
-// About dialog with version info.
-export component AboutDialog inherits Dialog {
-    title: "About protonctx";
-    icon: @image-url("icon/icon.svg");
-    in property <string> about-text: "";
-    preferred-width: 380px;
-    preferred-height: 200px;
-    min-width: 380px;
-    min-height: 200px;
-
-    VerticalBox {
-        padding: 16px;
-        Text {
-            text: root.about-text;
-            wrap: word-wrap;
-        }
-        HorizontalBox {
-            alignment: end;
-            Button {
-                text: "Close";
-                clicked => {
-                    root.hide();
                 }
             }
         }

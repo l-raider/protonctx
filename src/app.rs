@@ -59,7 +59,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
 
         if let Some(path) = dialog.pick_file() {
             if let Err(e) = launcher::proton::run_in_prefix(game, &[path.to_string_lossy().as_ref()]) {
-                eprintln!("protonctx: launch failed: {e}");
+                show_launch_error(&win, &e);
             }
         }
     });
@@ -75,7 +75,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
         };
 
         if let Err(e) = launcher::launch_tool(game, arg.as_str()) {
-            eprintln!("protonctx: launch failed: {e}");
+            show_launch_error(&win, &e);
         }
     });
 
@@ -165,4 +165,17 @@ fn center_on_parent<T: slint::ComponentHandle>(
     dialog
         .window()
         .set_position(slint::PhysicalPosition::new(x, y));
+}
+
+/// Show a launch failure to the user in a proper error dialog, centered on the main window. Also keeps the message on stderr so
+/// it survives even if the dialog cannot be shown.
+fn show_launch_error(parent: &MainWindow, error: &launcher::LaunchError) {
+    eprintln!("protonctx: launch failed: {error}");
+
+    let Some(dialog) = LaunchErrorDialog::new().ok() else {
+        return;
+    };
+    dialog.set_error_message(format!("Failed to launch: {error}").into());
+    center_on_parent(&dialog, parent.window(), (420.0, 160.0));
+    let _ = dialog.show();
 }
