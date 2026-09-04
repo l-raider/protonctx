@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use slint::{ModelRc, VecModel};
+use slint::{Model, ModelExt, ModelRc, StandardListViewItem, VecModel};
 
 use crate::launcher::{self, tools};
 use crate::models::Game;
@@ -16,10 +16,16 @@ const ABOUT_TEXT: &str = "protonctx 0.1.0\nLaunch executables inside a Steam gam
 pub fn run() -> Result<(), slint::PlatformError> {
     let window = MainWindow::new()?;
 
-    // Load the installed games and populate the UI model.
+    // Load the installed games and keep the `Game` list for launching. The table shows
+    // the same order; selection resolves back into this list via the sorted row model.
     let games = crate::steam::discover_games();
-    let model = build_game_model(&games);
-    window.set_games(model.clone());
+    let games_rc = Rc::new(games);
+
+    // Build the display rows (game name, app id, compat tool) and give them to the
+    // table adapter. The adapter's `sort` callback (wired below) re-sorts these rows
+    // in Rust, so the table's current-row always indexes into a stable sorted order.
+    let row_model = build_game_model(&games_rc);
+    window.global::<TableAdapter>().set_rows(row_model);
 
     // Built-in tools shown in the action bar.
     let tools_model: Vec<Tool> = tools::BUILTIN_TOOLS
@@ -31,24 +37,20 @@ pub fn run() -> Result<(), slint::PlatformError> {
         .collect();
     window.set_tools(Rc::new(VecModel::from(tools_model)).into());
 
-    // Keep the `Game` structs for the selection index and launching.
-    let games_rc = Rc::new(games);
-
-    // select-game: store the selected index in the UI.
-    let weak = window.as_weak();
-    window.on_select_game(move |idx| {
-        if let Some(win) = weak.upgrade() {
-            win.set_selected_index(idx);
-        }
+    // sort: given the (previously sorted/filtered) row model, return a new model sorted
+    // by the requested column. Runs on every sort request from the table headers.
+    window.global::<TableAdapter>().on_sort(|rows, column, ascending| {
+        sort_rows(rows, column, ascending)
     });
 
-    // browse-exe: open the XDG-portal file dialog, then launch the chosen .exe.
+    // browse-exe: open the XDG-portal file dialog, then launch the chosen .exe for the
+    // selected game (selection resolves into the sorted row model, so it always matches
+    // the visible row even after sorting).
     let weak = window.as_weak();
     let games_browse = games_rc.clone();
     window.on_browse_exe(move || {
         let Some(win) = weak.upgrade() else { return };
-        let idx = win.get_selected_index();
-        let Some(game) = selected_game(&games_browse, idx) else {
+        let Some(game) = selected_game(&games_browse, &win) else {
             return;
         };
 
@@ -69,8 +71,7 @@ pub fn run() -> Result<(), slint::PlatformError> {
     let games_tool = games_rc.clone();
     window.on_launch_tool(move |arg| {
         let Some(win) = weak.upgrade() else { return };
-        let idx = win.get_selected_index();
-        let Some(game) = selected_game(&games_tool, idx) else {
+        let Some(game) = selected_game(&games_tool, &win) else {
             return;
         };
 
@@ -103,21 +104,52 @@ pub fn run() -> Result<(), slint::PlatformError> {
     window.run()
 }
 
-/// Build the Slint model of display rows from the discovered games.
-fn build_game_model(games: &[Game]) -> ModelRc<GameInfo> {
-    let rows: Vec<GameInfo> = games
+/// Build the Slint table model (a model of rows, each a model of cells) from the games.
+/// Cell order: name, app id, compat tool — matching the table's columns.
+fn build_game_model(games: &[Game]) -> ModelRc<ModelRc<StandardListViewItem>> {
+    let row_vec: Vec<ModelRc<StandardListViewItem>> = games
         .iter()
-        .map(|g| GameInfo {
-            name: g.name.clone().into(),
-            app_id: g.app_id.to_string().into(),
-            compat_tool: display_compat_tool(g),
+        .map(|g| {
+            let cells: Vec<StandardListViewItem> = vec![
+                slint::format!("{}", g.name).into(),
+                slint::format!("{}", g.app_id).into(),
+                slint::format!("{}", display_compat_tool(g)).into(),
+            ];
+            Rc::new(VecModel::from(cells)).into()
         })
         .collect();
-    Rc::new(VecModel::from(rows)).into()
+    Rc::new(VecModel::from(row_vec)).into()
 }
 
-/// Return the [`Game`] at `idx`, or `None` if out of range.
-fn selected_game(games: &[Game], idx: i32) -> Option<&Game> {
+/// Sort the table rows by the given column (0 = name, 1 = app id, 2 = compat tool),
+/// ascending or descending. When `column < 0`, returns the rows unchanged.
+fn sort_rows(
+    rows: ModelRc<ModelRc<StandardListViewItem>>,
+    column: i32,
+    ascending: bool,
+) -> ModelRc<ModelRc<StandardListViewItem>> {
+    if column < 0 {
+        return rows;
+    }
+
+    let col = column as usize;
+    Rc::new(rows.sort_by(move |a, b| {
+        let cell_a = a.row_data(col).map(|c| c.text.clone()).unwrap_or_default();
+        let cell_b = b.row_data(col).map(|c| c.text.clone()).unwrap_or_default();
+        if ascending {
+            cell_a.cmp(&cell_b)
+        } else {
+            cell_b.cmp(&cell_a)
+        }
+    }))
+    .into()
+}
+
+/// Return the [`Game`] currently selected in the table. The game list and the table's
+/// row model share the same order, so the table's `selected-index` (current-row) maps
+/// directly into the list.
+fn selected_game<'a>(games: &'a [Game], window: &MainWindow) -> Option<&'a Game> {
+    let idx = window.get_selected_index();
     if idx < 0 {
         return None;
     }
