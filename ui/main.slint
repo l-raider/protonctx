@@ -28,16 +28,19 @@ export component MainWindow inherits Window {
     // Index of the selected row, or -1 when nothing is selected.
     in-out property <int> selected-index: -1;
 
-    // About dialog text, supplied from Rust (version + short description).
-    in property <string> about-text: "";
-
     // Callbacks wired in Rust.
     callback select-game(int);
     callback browse-exe();
     callback launch-tool(string);
+    callback show-settings();
+    callback show-about();
 
-    width: 720px;
-    height: 480px;
+    // Sizing: use preferred + min sizes (not fixed width/height) so the window is
+    // resizable and exposes native maximize/minimize controls.
+    preferred-width: 720px;
+    preferred-height: 480px;
+    min-width: 480px;
+    min-height: 320px;
 
     MenuBar {
         Menu {
@@ -45,7 +48,7 @@ export component MainWindow inherits Window {
             MenuItem {
                 title: "Preferences…";
                 activated => {
-                    settings-popup.show();
+                    root.show-settings();
                 }
             }
         }
@@ -54,7 +57,7 @@ export component MainWindow inherits Window {
             MenuItem {
                 title: "About protonctx";
                 activated => {
-                    about-popup.show();
+                    root.show-about();
                 }
             }
         }
@@ -154,69 +157,54 @@ export component MainWindow inherits Window {
             }
         }
     }
+}
 
-    // Settings placeholder popup (empty for now; will be expanded later).
-    settings-popup := PopupWindow {
-        width: 360px;
-        height: 180px;
-        close-policy: PopupClosePolicy.close-on-click-outside;
+// Settings dialog (placeholder for now; will be expanded later).
+export component SettingsDialog inherits Dialog {
+    title: "Settings";
+    preferred-width: 360px;
+    preferred-height: 180px;
+    min-width: 360px;
+    min-height: 180px;
 
-        Rectangle {
-            background: Palette.background;
-            border-color: Palette.border;
-            border-width: 1px;
-            border-radius: 4px;
-
-            VerticalBox {
-                Text {
-                    text: "Settings";
-                    font-weight: 700;
-                }
-                Text {
-                    text: "Nothing to configure yet.";
-                }
-                HorizontalBox {
-                    alignment: end;
-                    Button {
-                        text: "Close";
-                        clicked => {
-                            settings-popup.close();
-                        }
-                    }
+    VerticalBox {
+        padding: 16px;
+        Text {
+            text: "Nothing to configure yet.";
+        }
+        HorizontalBox {
+            alignment: end;
+            Button {
+                text: "Close";
+                clicked => {
+                    root.hide();
                 }
             }
         }
     }
+}
 
-    // About dialog with version info.
-    about-popup := PopupWindow {
-        width: 380px;
-        height: 200px;
-        close-policy: PopupClosePolicy.close-on-click-outside;
+// About dialog with version info.
+export component AboutDialog inherits Dialog {
+    title: "About protonctx";
+    in property <string> about-text: "";
+    preferred-width: 380px;
+    preferred-height: 200px;
+    min-width: 380px;
+    min-height: 200px;
 
-        Rectangle {
-            background: Palette.background;
-            border-color: Palette.border;
-            border-width: 1px;
-            border-radius: 4px;
-
-            VerticalBox {
-                Text {
-                    text: "About protonctx";
-                    font-weight: 700;
-                }
-                Text {
-                    text: root.about-text;
-                    wrap: word-wrap;
-                }
-                HorizontalBox {
-                    alignment: end;
-                    Button {
-                        text: "Close";
-                        clicked => {
-                            about-popup.close();
-                        }
-                    }
+    VerticalBox {
+        padding: 16px;
+        Text {
+            text: root.about-text;
+            wrap: word-wrap;
+        }
+        HorizontalBox {
+            alignment: end;
+            Button {
+                text: "Close";
+                clicked => {
+                    root.hide();
                 }
             }
         }

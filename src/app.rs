@@ -31,8 +31,6 @@ pub fn run() -> Result<(), slint::PlatformError> {
         .collect();
     window.set_tools(Rc::new(VecModel::from(tools_model)).into());
 
-    window.set_about_text(ABOUT_TEXT.into());
-
     // Keep the `Game` structs for the selection index and launching.
     let games_rc = Rc::new(games);
 
@@ -81,6 +79,27 @@ pub fn run() -> Result<(), slint::PlatformError> {
         }
     });
 
+    // show-settings: open the (placeholder) settings dialog, centered on the main window.
+    let weak = window.as_weak();
+    window.on_show_settings(move || {
+        let Some(win) = weak.upgrade() else { return };
+        if let Ok(dialog) = SettingsDialog::new() {
+            center_on_parent(&dialog, win.window(), (360.0, 180.0));
+            let _ = dialog.show();
+        }
+    });
+
+    // show-about: open the about dialog with version info, centered on the main window.
+    let weak = window.as_weak();
+    window.on_show_about(move || {
+        let Some(win) = weak.upgrade() else { return };
+        if let Ok(dialog) = AboutDialog::new() {
+            dialog.set_about_text(ABOUT_TEXT.into());
+            center_on_parent(&dialog, win.window(), (380.0, 200.0));
+            let _ = dialog.show();
+        }
+    });
+
     window.run()
 }
 
@@ -122,4 +141,28 @@ fn display_compat_tool(game: &Game) -> slint::SharedString {
     }
 
     "(default)".into()
+}
+
+/// Center `dialog` over `parent`, given the dialog's logical size in pixels.
+///
+/// Positions use physical screen coordinates. `set_position` is a no-op on some
+/// Wayland compositors that forbid client-side window placement, which is acceptable.
+fn center_on_parent<T: slint::ComponentHandle>(
+    dialog: &T,
+    parent: &slint::Window,
+    logical_size: (f32, f32),
+) {
+    let parent_pos = parent.position();
+    let parent_size = parent.size();
+    let scale = dialog.window().scale_factor().max(1.0);
+
+    let dialog_w = (logical_size.0 * scale) as i32;
+    let dialog_h = (logical_size.1 * scale) as i32;
+
+    let x = parent_pos.x + (parent_size.width as i32 - dialog_w) / 2;
+    let y = parent_pos.y + (parent_size.height as i32 - dialog_h) / 2;
+
+    dialog
+        .window()
+        .set_position(slint::PhysicalPosition::new(x, y));
 }
