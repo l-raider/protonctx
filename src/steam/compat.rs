@@ -93,12 +93,16 @@ mod tests {
 	}
 }"#;
 
-        let dir = std::env::temp_dir().join(format!("protonctx_test_compat_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("protonctx_test_compat_{}", std::process::id()));
         std::fs::create_dir_all(dir.join("config")).unwrap();
         std::fs::write(dir.join("config").join("config.vdf"), vdf).unwrap();
 
         let map = compat_tool_map(&dir);
-        assert_eq!(map.get("274190").map(String::as_str), Some("proton_experimental"));
+        assert_eq!(
+            map.get("274190").map(String::as_str),
+            Some("proton_experimental")
+        );
         assert_eq!(map.get("0").map(String::as_str), Some("proton_hotfix"));
 
         std::fs::remove_dir_all(&dir).ok();
@@ -120,7 +124,10 @@ mod tests {
 	}
 }"#;
 
-        let dir = std::env::temp_dir().join(format!("protonctx_test_compat_empty_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "protonctx_test_compat_empty_{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(dir.join("config")).unwrap();
         std::fs::write(dir.join("config").join("config.vdf"), vdf).unwrap();
 

@@ -15,7 +15,9 @@ const CANDIDATES: [&str; 4] = [
 
 /// Return the home directory, if it can be determined.
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from).filter(|p| !p.as_os_str().is_empty())
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
 }
 
 /// Find the Steam root directory by checking known locations for the presence of the

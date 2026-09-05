@@ -28,7 +28,10 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
     cmd.args(args);
 
     cmd.env("STEAM_COMPAT_DATA_PATH", &compat_data);
-    cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", steam_client_install_path(game));
+    cmd.env(
+        "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+        steam_client_install_path(game),
+    );
     cmd.env("SteamGameId", game.app_id.to_string());
     cmd.env("SteamAppId", game.app_id.to_string());
 
@@ -93,7 +96,9 @@ mod tests {
 
     #[test]
     fn derives_root_from_builtin_proton() {
-        let root = steam_root_from_proton_dir("/home/u/.local/share/Steam/steamapps/common/Proton - Experimental");
+        let root = steam_root_from_proton_dir(
+            "/home/u/.local/share/Steam/steamapps/common/Proton - Experimental",
+        );
         assert_eq!(
             root,
             Some(std::path::PathBuf::from("/home/u/.local/share/Steam"))
@@ -102,7 +107,9 @@ mod tests {
 
     #[test]
     fn derives_root_from_custom_proton() {
-        let root = steam_root_from_proton_dir("/home/u/.local/share/Steam/compatibilitytools.d/GE-Proton10-34");
+        let root = steam_root_from_proton_dir(
+            "/home/u/.local/share/Steam/compatibilitytools.d/GE-Proton10-34",
+        );
         assert_eq!(
             root,
             Some(std::path::PathBuf::from("/home/u/.local/share/Steam"))

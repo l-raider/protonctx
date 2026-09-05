@@ -74,7 +74,10 @@ mod tests {
     use super::*;
 
     fn write_config_info(dir: &Path, app_id: u32, content: &str) {
-        let compatdata = dir.join("steamapps").join("compatdata").join(app_id.to_string());
+        let compatdata = dir
+            .join("steamapps")
+            .join("compatdata")
+            .join(app_id.to_string());
         std::fs::create_dir_all(&compatdata).unwrap();
         std::fs::write(compatdata.join("config_info"), content).unwrap();
     }
@@ -82,7 +85,10 @@ mod tests {
     #[test]
     fn resolves_builtin_proton_dir() {
         let dir = std::env::temp_dir().join(format!("protonctx_test_cd_{}", std::process::id()));
-        let proton = dir.join("steamapps").join("common").join("Proton - Experimental");
+        let proton = dir
+            .join("steamapps")
+            .join("common")
+            .join("Proton - Experimental");
         std::fs::create_dir_all(&proton).unwrap();
 
         let content = format!(
@@ -100,7 +106,8 @@ mod tests {
 
     #[test]
     fn none_when_no_prefix() {
-        let dir = std::env::temp_dir().join(format!("protonctx_test_cd_none_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("protonctx_test_cd_none_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         assert!(proton_dir_for(&dir, 999999).is_none());
         std::fs::remove_dir_all(&dir).ok();

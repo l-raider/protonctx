@@ -26,8 +26,8 @@ pub fn library_folders(steam_root: &Path) -> Result<Vec<PathBuf>, SteamError> {
     };
 
     let text = std::fs::read_to_string(&path)?;
-    let vdf = parse_text(&text)
-        .map_err(|e| SteamError::Parse(format!("libraryfolders.vdf: {e}")))?;
+    let vdf =
+        parse_text(&text).map_err(|e| SteamError::Parse(format!("libraryfolders.vdf: {e}")))?;
 
     // The root key is "libraryfolders"; its value is the object keyed by library id.
     let Some(libraryfolders) = vdf.as_obj() else {

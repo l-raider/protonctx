@@ -17,7 +17,10 @@ impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LaunchError::NoProtonDir => {
-                write!(f, "no Proton directory found for this game (has it been run yet?)")
+                write!(
+                    f,
+                    "no Proton directory found for this game (has it been run yet?)"
+                )
             }
             LaunchError::Spawn(kind) => write!(f, "failed to start process: {kind}"),
         }

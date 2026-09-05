@@ -88,7 +88,8 @@ mod tests {
 	"installdir"		"Broforce"
 }"#;
 
-        let dir = std::env::temp_dir().join(format!("protonctx_test_manifest_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("protonctx_test_manifest_{}", std::process::id()));
         let steamapps = dir.join("steamapps");
         std::fs::create_dir_all(&steamapps).unwrap();
         std::fs::write(steamapps.join("appmanifest_274190.acf"), acf).unwrap();
@@ -104,7 +105,10 @@ mod tests {
 
     #[test]
     fn skips_non_manifest_files() {
-        let dir = std::env::temp_dir().join(format!("protonctx_test_manifest_skip_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "protonctx_test_manifest_skip_{}",
+            std::process::id()
+        ));
         let steamapps = dir.join("steamapps");
         std::fs::create_dir_all(&steamapps).unwrap();
         std::fs::write(steamapps.join("libraryfolders.vdf"), "x").unwrap();
