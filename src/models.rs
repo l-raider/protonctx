@@ -1,8 +1,8 @@
 //! Shared data structures for protonctx.
 //!
-//! `Game` is mirrored in `ui/main.slint` as a Slint struct via `@rust-attr(derive(...))`.
-//! The struct is kept deliberately small: the UI only needs display fields plus the
-//! `proton_dir` used to launch executables.
+//! `Game` is the display + launch record shown in the Qt games table and passed to the
+//! Proton launcher. It is kept deliberately small: the UI only needs display fields plus
+//! the `proton_dir` used to launch executables.
 
 /// A single installed Steam game (or Steam "app") that can be run under Proton.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -4,25 +4,24 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Launch executables inside a Steam game's Proton context"
-repository = "https://github.com/lraider/protonctx"
+repository = "local"
 
 [dependencies]
-slint = { version = "1.17", default-features = false, features = ["std", "backend-qt", "compat-1-2"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+cxx-qt = "0.10"
+cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
 steam-vdf-parser = "0.1"
-rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
+cxx = "=1.0"
+cxx-gen = "=0.7"
 
 [build-dependencies]
-slint-build = "1.17"
+cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
+# Must match [dependencies] cxx pin.
+cxx = "=1.0"
 
-#[profile.release]
-#lto = true
-#strip = true
-#codegen-units = 1
-
-[workspace.lints.rust]
-unsafe_code = "forbid"
+# [profile.release]
+# lto = true
+# strip = true
+# codegen-units = 1
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

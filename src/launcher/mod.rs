@@ -1,7 +1,6 @@
 //! Launch executables inside a game's Proton prefix.
 
 pub mod proton;
-pub mod tools;
 
 use crate::models::Game;
 

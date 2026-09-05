@@ -20,9 +20,8 @@ selected game's Proton prefix.
 Requirements:
 
 - Rust 2024 edition toolchain (1.87+).
-- Qt 6 (or Qt 5.15+) development libraries for the Slint `qt`/`native` style. On Fedora:
-  `dnf install qt6-qtbase-devel`. If Qt is absent, Slint falls back to the `fluent` style.
-- A desktop portal provider at runtime for the file picker (installed with KDE/GNOME).
+- Qt 6 development libraries (the UI is native Qt Widgets via cxx-qt). On Fedora:
+  `dnf install qt6-qtbase-devel`. A C++ toolchain and `qmake` are also required.
 
 ```sh
 cargo build --release
