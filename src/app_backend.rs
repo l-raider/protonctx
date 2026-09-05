@@ -1,6 +1,6 @@
 //! cxx-qt bridge exposing the Steam games table as a `QAbstractTableModel`.
 //!
-//! The model is consumed by `src/qt_app.cpp`, which builds a native Qt Widgets
+//! The model is consumed by `src/qt_main_ui.cpp`, which builds a native Qt Widgets
 //! `QMainWindow`. All
 //! Steam discovery and Proton launching is delegated to `crate::steam` and
 //! `crate::launcher`, which are reused unchanged from the earlier Slint implementation.

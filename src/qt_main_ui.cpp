@@ -6,8 +6,6 @@
 #include <QtGui/QIcon>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
-#include <QtWidgets/QDialog>
-#include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QHeaderView>
@@ -27,6 +25,11 @@
 #include <vector>
 
 #include "protonctx/src/app_backend.cxxqt.h"
+
+// Dialogs live in their own translation units; declared here so the menu
+// actions in wire_signals() can call them.
+void show_about_dialog(QWidget *parent);
+void show_settings_dialog(QWidget *parent);
 
 static int s_argc = 1;
 static char s_argv0[] = "protonctx";
@@ -61,34 +64,6 @@ constexpr ToolButton k_tool_buttons[] = {
     {"Task Manager", "taskmgr"},
     {"Wine Configuration", "winecfg"},
 };
-
-void show_about_dialog(QWidget *parent) {
-  const QString text =
-      QStringLiteral(
-          "protonctx %1\n\n"
-          "Launch executables inside a Steam game's Proton context.\n\n"
-          "Licensed under the GNU GPL v3.")
-          .arg(s_backend ? s_backend->getApp_version() : QString());
-  QMessageBox::about(parent, QStringLiteral("About protonctx"), text);
-}
-
-void show_settings_dialog(QWidget *parent) {
-  QDialog dialog(parent);
-  dialog.setWindowTitle(QStringLiteral("Settings"));
-  dialog.setModal(true);
-
-  auto *layout = new QVBoxLayout(&dialog);
-  auto *label = new QLabel(QStringLiteral("TODO"), &dialog);
-  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-
-  layout->addWidget(label);
-  layout->addWidget(buttons);
-
-  QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                   &QDialog::reject);
-
-  dialog.exec();
-}
 
 // Build the File/About menus and wire Exit. Returns the Settings and About
 // actions so their `triggered` signals can be wired later.
