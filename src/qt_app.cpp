@@ -155,6 +155,13 @@ void setup_context_menu(QTableView *table_view, AppBackend *backend,
                            QGuiApplication::clipboard()->setText(path);
                          }
                        });
+        menu.addAction(QStringLiteral("Copy compatibility tool path"),
+                       [backend, index] {
+                         const QString path = backend->protonDirPath(index.row());
+                         if (!path.isEmpty()) {
+                           QGuiApplication::clipboard()->setText(path);
+                         }
+                       });
         menu.exec(table_view->viewport()->mapToGlobal(pos));
       });
 }

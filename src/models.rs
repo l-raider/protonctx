@@ -20,7 +20,14 @@ pub struct Game {
     pub library_path: String,
     /// Absolute path to the Proton compatibility tool directory that this game runs with,
     /// e.g. `"/home/lraider/.local/share/Steam/steamapps/common/Proton - Experimental"`.
-    /// Empty when it could not be resolved (game not yet run / no prefix created).
+    /// Empty when it could not be resolved.
+    ///
+    /// Prefer resolving this *from the currently-selected `compat_tool`* (see
+    /// `steam::compat::proton_dir_for_tool`): a prefix's `config_info` records the tool
+    /// that *created* the prefix and goes stale when the user switches tools in Steam
+    /// without recreating the prefix, so it is only a fallback. If the selected tool
+    /// cannot be located, the launcher and the "copy tool path" UI fall back to the
+    /// prefix's recorded tool.
     pub proton_dir: String,
 }
 

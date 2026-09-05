@@ -115,6 +115,9 @@ pub mod qobject {
         #[cxx_name = "compatDataPath"]
         fn compat_data_path(self: &AppBackend, row: i32) -> QString;
         #[qinvokable]
+        #[cxx_name = "protonDirPath"]
+        fn proton_dir_path(self: &AppBackend, row: i32) -> QString;
+        #[qinvokable]
         fn sort_by(self: Pin<&mut AppBackend>, column: i32, ascending: bool);
         #[qinvokable]
         fn launch_tool(self: Pin<&mut AppBackend>, arg: &QString);
@@ -321,6 +324,17 @@ impl qobject::AppBackend {
             .join(game.app_id.to_string());
 
         QString::from(&path.to_string_lossy().into_owned())
+    }
+
+    /// The absolute path of the compatibility tool the game runs with (its `proton_dir`,
+    /// e.g. `.../steamapps/common/Proton - Experimental`), or an empty string when it
+    /// could not be resolved (the game's prefix has not been created yet).
+    fn proton_dir_path(&self, row: i32) -> QString {
+        self.rust()
+            .games
+            .get(row as usize)
+            .map(|game| QString::from(&game.proton_dir))
+            .unwrap_or_default()
     }
 
     fn sort_by(mut self: Pin<&mut Self>, column: i32, ascending: bool) {

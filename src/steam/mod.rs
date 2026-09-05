@@ -126,20 +126,28 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
                 .cloned()
                 .unwrap_or_default();
 
-            let proton_dir = match compatdata::proton_dir_for(library, app.app_id) {
-                Ok(Some(p)) => p.to_string_lossy().into_owned(),
-                Ok(None) => String::new(),
-                Err(e) => {
-                    // A bad `compatdata/<id>/config_info` (e.g. permission denied)
-                    // must not abort the whole discovery — just leave the prefix
-                    // unresolved for this one game, like a manifest error does.
-                    eprintln!(
-                        "protonctx: failed to resolve proton dir for app {}: {e}",
-                        app.app_id
-                    );
-                    String::new()
-                }
-            };
+            // Resolve the Proton directory for this game. The *selected* tool (from
+            // config.vdf CompatToolMapping) is authoritative: it is what the row shows and
+            // what a launch should use. The prefix's config_info records the tool that
+            // *created* the prefix and goes stale when the user switches tools in Steam
+            // without recreating the prefix, so it is only a fallback for games whose
+            // selected tool cannot be located (e.g. a non-Proton layer like Boxtron).
+            let proton_dir = crate::steam::compat::proton_dir_for_tool(&steam_root, &compat_tool)
+                .or_else(|| {
+                    compatdata::proton_dir_for(library, app.app_id)
+                        .unwrap_or_else(|e| {
+                            // A bad `compatdata/<id>/config_info` (e.g. permission denied)
+                            // must not abort the whole discovery — just leave the prefix
+                            // unresolved for this one game, like a manifest error does.
+                            eprintln!(
+                                "protonctx: failed to resolve proton dir for app {}: {e}",
+                                app.app_id
+                            );
+                            None
+                        })
+                })
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
 
             games.push(Game {
                 name: app.name,
