@@ -26,19 +26,6 @@ use super::SteamError;
 /// Suffix that marks the `default_pfx` line inside a Proton `dist` directory.
 const DEFAULT_PFX_SUFFIX: &str = "/files/share/default_pfx/";
 
-/// The first line of `config_info` is the Wine version reported by the tool (e.g. `11.0-100`).
-/// Exposed separately for potential display, though the UI currently only needs the dir.
-#[allow(dead_code)]
-pub fn wine_version(library: &Path, app_id: u32) -> Result<Option<String>, SteamError> {
-    let Some(lines) = read_lines(library, app_id)? else {
-        return Ok(None);
-    };
-    Ok(lines
-        .into_iter()
-        .find(|l| !l.trim().is_empty())
-        .map(|l| l.trim().to_string()))
-}
-
 /// Resolve the Proton directory for the given app's prefix, or `None` if the prefix has not
 /// been created yet (the game has never been run under Proton).
 pub fn proton_dir_for(library: &Path, app_id: u32) -> Result<Option<PathBuf>, SteamError> {

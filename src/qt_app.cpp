@@ -2,7 +2,6 @@
 #include <QtCore/QPointer>
 #include <QtGui/QAction>
 #include <QtGui/QIcon>
-#include <QtGui/QKeySequence>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QDialog>
