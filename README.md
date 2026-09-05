@@ -13,15 +13,19 @@ selected game's Proton prefix.
   resolved Proton directory when no explicit mapping exists.
 - "Select" a game, then either **Browse…** for an executable or launch a built-in tool
   (`winecfg`, Task Manager, Explorer, Registry Editor).
-- Standard top menu with **Settings** (placeholder) and **About** (version info).
+- Right-click a row for a context menu (launch tools, copy the compatdata or
+  compatibility-tool path).
+- Standard top menu with **Settings** (remember the last-used directory) and **About**
+  (version info).
 
 ## Building
 
 Requirements:
 
 - Rust 2024 edition toolchain (1.87+).
-- Qt 6 development libraries (the UI is native Qt Widgets via cxx-qt). On Fedora:
-  `dnf install qt6-qtbase-devel`. A C++ toolchain and `qmake` are also required.
+- Qt 6 development libraries (minimum **Qt 6.8 LTS**; the UI is native Qt Widgets via
+  cxx-qt). On Fedora: `dnf install qt6-qtbase-devel`. A C++ toolchain and `qmake` are
+  also required.
 
 ```sh
 cargo build --release
@@ -54,9 +58,19 @@ cargo run
 - **Proton directory**: resolved authoritatively from `compatdata/<appid>/config_info`
   (works for both built-in tools under `steamapps/common` and custom tools under
   `compatibilitytools.d`, e.g. GE-Proton).
+- **Compatdata (prefix) location**: Steam stores Proton prefixes under the installation
+  root's `steamapps/compatdata/<appid>`, not under a secondary library. The launcher
+  resolves the Steam root from the Proton directory and points `STEAM_COMPAT_DATA_PATH`
+  there, so games installed on a secondary library still launch against the correct prefix.
 - **Launching**: invokes `<proton_dir>/proton runinprefix <arg>` with the Steam compat
   environment (`STEAM_COMPAT_DATA_PATH`, `STEAM_COMPAT_CLIENT_INSTALL_PATH`, `SteamGameId`).
 
 ## License
 
 GNU GPL v3. See [LICENSE](LICENSE).
+
+## Attribution
+
+The application icon (`ui/icon/icon.svg`) is "Game Development" by
+[Sooodesign](https://www.svgrepo.com/svg/426047/game-developement), licensed under
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
