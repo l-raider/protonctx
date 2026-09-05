@@ -132,15 +132,23 @@ pub struct AppBackendRust {
     status_text: QString,
     /// Application version, shown in the About dialog.
     app_version: QString,
+    /// Cached `roleNames()` map — roles never change, so build it once.
+    role_names: QHash<QHashPair_i32_QByteArray>,
+    /// Monotonic load-generation counter used to discard stale async results.
+    load_generation: u64,
 }
 
 impl Default for AppBackendRust {
     fn default() -> Self {
+        let mut role_names = QHash::<QHashPair_i32_QByteArray>::default();
+        role_names.insert(ROLE_DISPLAY, QByteArray::from("display"));
         Self {
             games: Vec::new(),
             selected_row: -1,
             status_text: QString::from("Ready"),
             app_version: QString::from(env!("CARGO_PKG_VERSION")),
+            role_names,
+            load_generation: 0,
         }
     }
 }
@@ -207,9 +215,7 @@ impl qobject::AppBackend {
     }
 
     fn role_names(&self) -> QHash<QHashPair_i32_QByteArray> {
-        let mut map = QHash::<QHashPair_i32_QByteArray>::default();
-        map.insert(ROLE_DISPLAY, QByteArray::from("display"));
-        map
+        self.rust().role_names.clone()
     }
 
     fn load_games(mut self: Pin<&mut Self>) {
@@ -220,10 +226,23 @@ impl qobject::AppBackend {
         self.as_mut()
             .set_status_text(QString::from("Loading games..."));
 
+        // Bump the generation up front, so a stale in-flight result is dropped
+        // if `load_games` is invoked again before this scan finishes.
+        let generation = {
+            let mut state = self.as_mut().rust_mut();
+            state.load_generation = state.load_generation.wrapping_add(1);
+            state.load_generation
+        };
+
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
             let result = crate::steam::discover_games();
             let _ = qt_thread.queue(move |mut app| {
+                // A newer load superseded this one while discovery was running;
+                // discard the stale result rather than clobbering the latest.
+                if generation != app.as_ref().rust().load_generation {
+                    return;
+                }
                 let (games, status) = match result {
                     Ok(mut games) => {
                         // Default view: sorted by game name, ascending (matches
@@ -269,6 +288,10 @@ impl qobject::AppBackend {
         self.as_mut().set_selected_row(clamped);
     }
 
+    /// The Steam App ID at `row`, or `0` when the row is out of range.
+    ///
+    /// `0` is a "no such row" sentinel: the C++ side only calls this with a
+    /// valid selected row, so the sentinel is unreachable in practice.
     fn selected_app_id(&self, row: i32) -> u32 {
         self.rust()
             .games

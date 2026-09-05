@@ -80,7 +80,15 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
         }
     };
 
-    let compat_tools = compat::compat_tool_map(&steam_root);
+    let compat_tools = match compat::compat_tool_map(&steam_root) {
+        Ok(map) => map,
+        Err(e) => {
+            // Non-fatal: a corrupt config.vdf just means we can't show per-game
+            // tool names, not that discovery itself failed.
+            eprintln!("protonctx: failed to parse config.vdf: {e}");
+            std::collections::HashMap::new()
+        }
+    };
 
     let mut games = Vec::new();
     for library in &libraries {
