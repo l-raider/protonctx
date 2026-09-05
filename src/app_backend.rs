@@ -98,6 +98,9 @@ pub mod qobject {
         #[qinvokable]
         fn select_row(self: Pin<&mut AppBackend>, row: i32);
         #[qinvokable]
+        #[cxx_name = "selectedAppId"]
+        fn selected_app_id(self: &AppBackend, row: i32) -> u32;
+        #[qinvokable]
         fn sort_by(self: Pin<&mut AppBackend>, column: i32, ascending: bool);
         #[qinvokable]
         fn launch_tool(self: Pin<&mut AppBackend>, arg: &QString);
@@ -219,6 +222,14 @@ impl qobject::AppBackend {
 
     fn select_row(mut self: Pin<&mut Self>, row: i32) {
         self.as_mut().set_selected_row(row);
+    }
+
+    fn selected_app_id(&self, row: i32) -> u32 {
+        self.rust()
+            .games
+            .get(row as usize)
+            .map(|game| game.app_id)
+            .unwrap_or(0)
     }
 
     fn sort_by(mut self: Pin<&mut Self>, column: i32, ascending: bool) {

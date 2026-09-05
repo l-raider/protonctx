@@ -190,7 +190,12 @@ extern "C" {
             [backend, selection_label, sync_action_state](const QModelIndex& current, const QModelIndex&) {
                 const int row = current.isValid() ? current.row() : -1;
                 backend->select_row(row);
-                selection_label->setText(row >= 0 ? QStringLiteral("Selected: %1").arg(row + 1) : QString());
+                if (row >= 0) {
+                    const uint app_id = backend->selectedAppId(row);
+                    selection_label->setText(QStringLiteral("Selected: %1").arg(app_id));
+                } else {
+                    selection_label->clear();
+                }
                 sync_action_state();
             });
 
@@ -221,6 +226,12 @@ extern "C" {
         // the column stays Interactive so the user can still drag it.
         QObject::connect(backend, &QAbstractItemModel::modelReset, central_widget, [table_view, sync_action_state]() {
             table_view->resizeColumnToContents(0);
+            // A model reset clears the selection, but when the window next gains
+            // focus QAbstractItemView::focusInEvent auto-selects row 0 if no
+            // current index is set. Mark the current index as deliberately
+            // unset so no row is selected by default.
+            table_view->setCurrentIndex(QModelIndex());
+            table_view->selectionModel()->clearSelection();
             sync_action_state();
         });
 
