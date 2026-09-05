@@ -21,40 +21,50 @@
 
 use std::path::{Path, PathBuf};
 
+use super::SteamError;
+
 /// Suffix that marks the `default_pfx` line inside a Proton `dist` directory.
 const DEFAULT_PFX_SUFFIX: &str = "/files/share/default_pfx/";
 
 /// The first line of `config_info` is the Wine version reported by the tool (e.g. `11.0-100`).
 /// Exposed separately for potential display, though the UI currently only needs the dir.
 #[allow(dead_code)]
-pub fn wine_version(library: &Path, app_id: u32) -> Option<String> {
-    let lines = read_lines(library, app_id)?;
-    lines
+pub fn wine_version(library: &Path, app_id: u32) -> Result<Option<String>, SteamError> {
+    let Some(lines) = read_lines(library, app_id)? else {
+        return Ok(None);
+    };
+    Ok(lines
         .into_iter()
         .find(|l| !l.trim().is_empty())
-        .map(|l| l.trim().to_string())
+        .map(|l| l.trim().to_string()))
 }
 
 /// Resolve the Proton directory for the given app's prefix, or `None` if the prefix has not
 /// been created yet (the game has never been run under Proton).
-pub fn proton_dir_for(library: &Path, app_id: u32) -> Option<PathBuf> {
-    let lines = read_lines(library, app_id)?;
+pub fn proton_dir_for(library: &Path, app_id: u32) -> Result<Option<PathBuf>, SteamError> {
+    let Some(lines) = read_lines(library, app_id)? else {
+        return Ok(None);
+    };
 
     for line in lines {
         if let Some(idx) = line.rfind(DEFAULT_PFX_SUFFIX) {
             let proton_dir = &line[..idx];
             let path = Path::new(proton_dir);
             if path.is_dir() {
-                return Some(path.to_path_buf());
+                return Ok(Some(path.to_path_buf()));
             }
         }
     }
 
-    None
+    Ok(None)
 }
 
 /// Read the `config_info` file for an app's compatdata directory, if it exists.
-fn read_lines(library: &Path, app_id: u32) -> Option<Vec<String>> {
+///
+/// A missing file returns `Ok(None)` (the prefix simply hasn't been created yet),
+/// while a genuine I/O failure (e.g. permission denied) is propagated as an error
+/// rather than silently swallowed.
+fn read_lines(library: &Path, app_id: u32) -> Result<Option<Vec<String>>, SteamError> {
     let config_info = library
         .join("steamapps")
         .join("compatdata")
@@ -62,11 +72,11 @@ fn read_lines(library: &Path, app_id: u32) -> Option<Vec<String>> {
         .join("config_info");
 
     if !config_info.is_file() {
-        return None;
+        return Ok(None);
     }
 
-    let text = std::fs::read_to_string(config_info).ok()?;
-    Some(text.lines().map(str::to_string).collect())
+    let text = std::fs::read_to_string(config_info)?;
+    Ok(Some(text.lines().map(str::to_string).collect()))
 }
 
 #[cfg(test)]
@@ -98,7 +108,7 @@ mod tests {
         );
         write_config_info(&dir, 274190, &content);
 
-        let resolved = proton_dir_for(&dir, 274190).unwrap();
+        let resolved = proton_dir_for(&dir, 274190).unwrap().unwrap();
         assert_eq!(resolved, proton);
 
         std::fs::remove_dir_all(&dir).ok();
@@ -109,7 +119,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("protonctx_test_cd_none_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(proton_dir_for(&dir, 999999).is_none());
+        assert!(proton_dir_for(&dir, 999999).unwrap().is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

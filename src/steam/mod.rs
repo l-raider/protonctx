@@ -20,6 +20,8 @@ use crate::models::Game;
 pub enum SteamError {
     Io(std::io::Error),
     Parse(String),
+    /// Steam could not be located (none of the known install paths exist).
+    SteamNotFound,
 }
 
 impl std::fmt::Display for SteamError {
@@ -27,6 +29,7 @@ impl std::fmt::Display for SteamError {
         match self {
             SteamError::Io(e) => write!(f, "I/O error: {e}"),
             SteamError::Parse(msg) => write!(f, "parse error: {msg}"),
+            SteamError::SteamNotFound => write!(f, "Steam installation not found"),
         }
     }
 }
@@ -52,13 +55,10 @@ fn is_compat_tool(install_dir: &std::path::Path) -> bool {
 
 /// Discover the installed Steam games across all library folders.
 ///
-/// Returns an empty list (never an error) if Steam cannot be located — the GUI
-/// should simply show an empty table in that case.
-pub fn discover_games() -> Vec<Game> {
-    let Some(steam_root) = locations::find_steam_root() else {
-        eprintln!("protonctx: could not locate a Steam installation");
-        return Vec::new();
-    };
+/// Returns `Err(SteamError::SteamNotFound)` when Steam cannot be located, so the
+/// GUI can distinguish "Steam missing" from an empty library.
+pub fn discover_games() -> Result<Vec<Game>, SteamError> {
+    let steam_root = locations::find_steam_root().ok_or(SteamError::SteamNotFound)?;
 
     let libraries = match libraryfolders::library_folders(&steam_root) {
         Ok(libs) if !libs.is_empty() => libs,
@@ -111,7 +111,7 @@ pub fn discover_games() -> Vec<Game> {
                 .cloned()
                 .unwrap_or_default();
 
-            let proton_dir = compatdata::proton_dir_for(library, app.app_id)
+            let proton_dir = compatdata::proton_dir_for(library, app.app_id)?
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default();
 
@@ -133,5 +133,5 @@ pub fn discover_games() -> Vec<Game> {
             .then(a.app_id.cmp(&b.app_id))
     });
 
-    games
+    Ok(games)
 }

@@ -21,7 +21,9 @@
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 
+#include <functional>
 #include <memory>
+#include <vector>
 
 #include "protonctx/src/app_backend.cxxqt.h"
 
@@ -87,81 +89,21 @@ void show_settings_dialog(QWidget *parent) {
   dialog.exec();
 }
 
-} // namespace
-
-extern "C" {
-void qt_app_init() {
-  if (!s_app) {
-    s_app = std::make_unique<QApplication>(s_argc, s_argv);
-    s_app->setWindowIcon(QIcon(QStringLiteral(":/icons/icon.svg")));
-  }
-}
-
-int qt_app_exec() {
-  if (!s_app) {
-    return 1;
-  }
-  const int code = s_app->exec();
-  // Destroy QApplication while TLS is still fully valid.
-  s_app.reset();
-  return code;
-}
-
-void qt_show_main_window() {
-  if (s_main_window) {
-    s_main_window->show();
-    s_main_window->raise();
-    s_main_window->activateWindow();
-    return;
-  }
-
-  s_main_window = new QMainWindow();
-  auto *window = s_main_window.data();
-  auto *central_widget = new QWidget(window);
-  auto *main_layout = new QVBoxLayout(central_widget);
-  auto *actions_layout = new QHBoxLayout();
-  auto *table_view = new QTableView();
-  auto *backend = new AppBackend(central_widget);
-  auto *status_label = new QLabel();
-  auto *selection_label = new QLabel();
-  auto sort_state = std::make_shared<SortState>();
-
-  // Menu bar: Settings and About.
+// Build the File/About menus and wire Exit. Returns the Settings and About
+// actions so their `triggered` signals can be wired later.
+void setup_menu_bar(QMainWindow *window, QAction **settings_action,
+                    QAction **about_action) {
   auto *file_menu = window->menuBar()->addMenu(QStringLiteral("File"));
-  auto *settings_action = file_menu->addAction(QStringLiteral("Settings"));
+  *settings_action = file_menu->addAction(QStringLiteral("Settings"));
   file_menu->addSeparator();
   auto *exit_action = file_menu->addAction(QStringLiteral("Exit"));
   QObject::connect(exit_action, &QAction::triggered, window, &QWidget::close);
   auto *about_menu = window->menuBar()->addMenu(QStringLiteral("About"));
-  auto *about_action = about_menu->addAction(QStringLiteral("About protonctx"));
+  *about_action = about_menu->addAction(QStringLiteral("About protonctx"));
+}
 
-  main_layout->setContentsMargins(6, 6, 6, 6);
-  main_layout->setSpacing(4);
-  actions_layout->setSpacing(4);
-
-  // Action row: Browse... plus one button per built-in Wine tool,
-  // placed below the table.
-  auto *browse_button = new QPushButton(QStringLiteral("Browse..."));
-  actions_layout->addWidget(browse_button);
-
-  std::vector<QPushButton *> tool_buttons;
-  tool_buttons.reserve(std::size(k_tool_buttons));
-  // Build each tool button and wire its click to `launch_tool` in one pass, so
-  // the two loops can never drift out of sync.
-  for (const auto &tool : k_tool_buttons) {
-    auto *button = new QPushButton(QString::fromLatin1(tool.label));
-    actions_layout->addWidget(button);
-    tool_buttons.push_back(button);
-    const QString tool_id = QString::fromLatin1(tool.tool_id);
-    QObject::connect(button, &QPushButton::clicked, backend,
-                     [backend, tool_id](bool) { backend->launch_tool(tool_id); });
-  }
-  actions_layout->addStretch();
-
-  status_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-  selection_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-
-  table_view->setModel(backend);
+// Configure the table view's selection and header behavior.
+void setup_table(QTableView *table_view) {
   table_view->setSelectionBehavior(QAbstractItemView::SelectRows);
   table_view->setSelectionMode(QAbstractItemView::SingleSelection);
   table_view->setAlternatingRowColors(true);
@@ -174,23 +116,38 @@ void qt_show_main_window() {
   table_view->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
   table_view->verticalHeader()->setVisible(false);
   table_view->verticalHeader()->setDefaultSectionSize(28);
+}
 
-  // Table first, action buttons below it.
-  main_layout->addWidget(table_view, 1);
-  main_layout->addLayout(actions_layout);
+// Build the action row (Browse... + one button per built-in Wine tool) and wire
+// each tool button to `backend->launch_tool` in the same pass, so the label and
+// handler can never drift out of sync.
+void build_action_row(QHBoxLayout *actions_layout, AppBackend *backend,
+                      QPushButton **browse_button,
+                      std::vector<QPushButton *> *tool_buttons) {
+  *browse_button = new QPushButton(QStringLiteral("Browse..."));
+  actions_layout->addWidget(*browse_button);
 
-  window->statusBar()->addWidget(status_label, 1);
-  window->statusBar()->addPermanentWidget(selection_label);
+  tool_buttons->reserve(std::size(k_tool_buttons));
+  for (const auto &tool : k_tool_buttons) {
+    auto *button = new QPushButton(QString::fromLatin1(tool.label));
+    actions_layout->addWidget(button);
+    tool_buttons->push_back(button);
+    const QString tool_id = QString::fromLatin1(tool.tool_id);
+    QObject::connect(button, &QPushButton::clicked, backend,
+                     [backend, tool_id](bool) { backend->launch_tool(tool_id); });
+  }
+  actions_layout->addStretch();
+}
 
-  // Enable the launch buttons only when a game is selected.
-  const auto sync_action_state = [backend, browse_button, tool_buttons]() {
-    const bool has_selection = backend->getSelected_row() >= 0;
-    browse_button->setEnabled(has_selection);
-    for (auto *button : tool_buttons) {
-      button->setEnabled(has_selection);
-    }
-  };
-
+// Wire all remaining signals (selection, sorting, status, resets, launch errors,
+// browse, and the Settings/About actions).
+void wire_signals(QMainWindow *window, QWidget *central_widget,
+                  QTableView *table_view, AppBackend *backend,
+                  QLabel *status_label, QLabel *selection_label,
+                  QPushButton *browse_button,
+                  const std::shared_ptr<SortState> &sort_state,
+                  QAction *settings_action, QAction *about_action,
+                  const std::function<void()> &sync_action_state) {
   // Selection -> backend.selected_row -> button state + selection label.
   QObject::connect(
       table_view->selectionModel(), &QItemSelectionModel::currentRowChanged,
@@ -266,13 +223,88 @@ void qt_show_main_window() {
         }
       });
 
-  // Each tool button launches its Wine built-in in the selected prefix.
-  // See the creation loop above — connects are wired there.
-
   QObject::connect(settings_action, &QAction::triggered, window,
                    [window](bool) { show_settings_dialog(window); });
   QObject::connect(about_action, &QAction::triggered, window,
                    [window](bool) { show_about_dialog(window); });
+}
+
+} // namespace
+
+extern "C" {
+void qt_app_init() {
+  if (!s_app) {
+    s_app = std::make_unique<QApplication>(s_argc, s_argv);
+    s_app->setWindowIcon(QIcon(QStringLiteral(":/icons/icon.svg")));
+  }
+}
+
+int qt_app_exec() {
+  if (!s_app) {
+    return 1;
+  }
+  const int code = s_app->exec();
+  // Destroy QApplication while TLS is still fully valid.
+  s_app.reset();
+  return code;
+}
+
+void qt_show_main_window() {
+  if (s_main_window) {
+    s_main_window->show();
+    s_main_window->raise();
+    s_main_window->activateWindow();
+    return;
+  }
+
+  s_main_window = new QMainWindow();
+  auto *window = s_main_window.data();
+  auto *central_widget = new QWidget(window);
+  auto *main_layout = new QVBoxLayout(central_widget);
+  auto *actions_layout = new QHBoxLayout();
+  auto *table_view = new QTableView();
+  auto *backend = new AppBackend(central_widget);
+  auto *status_label = new QLabel();
+  auto *selection_label = new QLabel();
+  auto sort_state = std::make_shared<SortState>();
+
+  QAction *settings_action = nullptr;
+  QAction *about_action = nullptr;
+  setup_menu_bar(window, &settings_action, &about_action);
+
+  main_layout->setContentsMargins(6, 6, 6, 6);
+  main_layout->setSpacing(4);
+  actions_layout->setSpacing(4);
+
+  QPushButton *browse_button = nullptr;
+  std::vector<QPushButton *> tool_buttons;
+  build_action_row(actions_layout, backend, &browse_button, &tool_buttons);
+
+  status_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  selection_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
+  table_view->setModel(backend);
+  setup_table(table_view);
+
+  // Table first, action buttons below it.
+  main_layout->addWidget(table_view, 1);
+  main_layout->addLayout(actions_layout);
+
+  window->statusBar()->addWidget(status_label, 1);
+  window->statusBar()->addPermanentWidget(selection_label);
+
+  // Enable the launch buttons only when a game is selected.
+  const auto sync_action_state = [backend, browse_button, tool_buttons]() {
+    const bool has_selection = backend->getSelected_row() >= 0;
+    browse_button->setEnabled(has_selection);
+    for (auto *button : tool_buttons) {
+      button->setEnabled(has_selection);
+    }
+  };
+
+  wire_signals(window, central_widget, table_view, backend, status_label,
+               selection_label, browse_button, sort_state, settings_action,
+               about_action, sync_action_state);
 
   s_backend = backend;
 

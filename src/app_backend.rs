@@ -10,7 +10,7 @@
 
 use std::pin::Pin;
 
-use cxx_qt::CxxQtType;
+use cxx_qt::{CxxQtType, Threading};
 use cxx_qt_lib::{
     Orientation, QByteArray, QHash, QHashPair_i32_QByteArray, QModelIndex, QString, QVariant,
 };
@@ -212,26 +212,51 @@ impl qobject::AppBackend {
     }
 
     fn load_games(mut self: Pin<&mut Self>) {
-        let mut games = crate::steam::discover_games();
-        // Default view: sorted by game name, ascending (matches the C++ sort indicator).
-        games.sort_by_key(|game| sort_key(game, column::NAME));
-        let count = games.len();
+        // Discovery performs an unbounded FS scan, so run it on a background
+        // thread rather than blocking the GUI thread before the event loop runs.
+        // Results are delivered back onto the Qt event loop via `CxxQtThread`;
+        // the model must only be mutated on the GUI thread.
+        self.as_mut().set_status_text(QString::from("Loading games..."));
 
-        unsafe {
-            self.as_mut().begin_reset_model();
-        }
-        self.as_mut().rust_mut().games = games;
-        unsafe {
-            self.as_mut().end_reset_model();
-        }
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = crate::steam::discover_games();
+            let _ = qt_thread.queue(move |mut app| {
+                let (games, status) = match result {
+                    Ok(mut games) => {
+                        // Default view: sorted by game name, ascending (matches
+                        // the C++ sort indicator).
+                        games.sort_by_key(|game| sort_key(game, column::NAME));
+                        let count = games.len();
+                        let status = match count {
+                            0 => "No games found".to_string(),
+                            1 => "1 game loaded".to_string(),
+                            n => format!("{n} games loaded"),
+                        };
+                        (games, status)
+                    }
+                    Err(crate::steam::SteamError::SteamNotFound) => {
+                        (Vec::new(), "Steam not found".to_string())
+                    }
+                    Err(e) => {
+                        let msg = format!("Failed to discover games: {e}");
+                        eprintln!("protonctx: {msg}");
+                        (Vec::new(), msg)
+                    }
+                };
 
-        self.as_mut().set_selected_row(-1);
-        let status = if count == 1 {
-            "1 game loaded".to_string()
-        } else {
-            format!("{count} games loaded")
-        };
-        self.as_mut().set_status_text(QString::from(&status));
+                unsafe {
+                    app.as_mut().begin_reset_model();
+                }
+                app.as_mut().rust_mut().games = games;
+                unsafe {
+                    app.as_mut().end_reset_model();
+                }
+
+                app.as_mut().set_selected_row(-1);
+                app.as_mut().set_status_text(QString::from(&status));
+            });
+        });
     }
 
     fn select_row(mut self: Pin<&mut Self>, row: i32) {

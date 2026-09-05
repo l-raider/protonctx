@@ -5,12 +5,16 @@ pub mod proton;
 use crate::models::Game;
 
 /// What kind of command we're launching into a prefix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum LaunchError {
     /// The game's Proton directory could not be resolved (no prefix yet).
     NoProtonDir,
-    /// The process failed to spawn.
-    Spawn(std::io::ErrorKind),
+    /// The process failed to spawn; carries the resolved script path and the
+    /// underlying I/O error for an actionable message.
+    Spawn {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
 }
 
 impl std::fmt::Display for LaunchError {
@@ -22,7 +26,9 @@ impl std::fmt::Display for LaunchError {
                     "no Proton directory found for this game (has it been run yet?)"
                 )
             }
-            LaunchError::Spawn(kind) => write!(f, "failed to start process: {kind}"),
+            LaunchError::Spawn { path, source } => {
+                write!(f, "failed to start process `{}`: {source}", path.display())
+            }
         }
     }
 }
