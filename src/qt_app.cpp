@@ -29,6 +29,12 @@ static int s_argc = 1;
 static char s_argv0[] = "protonctx";
 static char *s_argv[] = {s_argv0, nullptr};
 
+// clazy:excludeall=non-pod-global-static
+// The Qt app object must outlive the individual `extern "C"` calls from Rust
+// (main.rs drives init/show/load/exec as separate FFI calls), so it is kept in
+// static storage. `s_app` is destroyed explicitly in qt_app_exec() while TLS is
+// still valid; the QPointers are non-owning and self-null when their targets
+// die.
 static std::unique_ptr<QApplication> s_app;
 static QPointer<QMainWindow> s_main_window;
 static QPointer<AppBackend> s_backend;

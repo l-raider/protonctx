@@ -46,14 +46,30 @@ else
         echo "== clang-tidy =="
         # Only core/C++ static-analyzer checks (skip clang-analyzer-webkit.*, which
         # fires on Qt system headers), and only report on our own src/ code.
+        # No compile_commands.json exists (cargo/cxx-qt build), so clang-tidy prints
+        # its "could not auto-detect compilation database" fallback noise to stderr;
+        # filter those expected lines and keep only real diagnostics.
         clang-tidy \
             -checks='clang-analyzer-core.*,clang-analyzer-cplusplus.*,clang-analyzer-deadcode.*,clang-analyzer-nullability.*,clang-analyzer-unix.*' \
             --header-filter='^.*/src/.*$' \
-            "${ARGS[@]}" "${CPP_FILES[@]}" 2>&1 || true
+            "${ARGS[@]}" "${CPP_FILES[@]}" \
+            2>&1 | grep -v "Error while trying to load a compilation database" \
+                   | grep -v "Could not auto-detect compilation database for file" \
+                   | grep -v "No compilation database found in" \
+                   | grep -v "fixed-compilation-database: Error while opening" \
+                   | grep -v "json-compilation-database: Error while opening" \
+                   | grep -v "Running without flags" || true
 
         echo "== clazy =="
         # Only report warnings from our own src/ headers, not Qt system headers.
-        clazy-standalone --header-filter='^.*/src/.*$' "${ARGS[@]}" "${CPP_FILES[@]}" 2>&1 || true
+        # Filter the expected "no compilation database" fallback noise (see above).
+        clazy-standalone --header-filter='^.*/src/.*$' "${ARGS[@]}" "${CPP_FILES[@]}" \
+            2>&1 | grep -v "Error while trying to load a compilation database" \
+                   | grep -v "Could not auto-detect compilation database for file" \
+                   | grep -v "No compilation database found in" \
+                   | grep -v "fixed-compilation-database: Error while opening" \
+                   | grep -v "json-compilation-database: Error while opening" \
+                   | grep -v "Running without flags" || true
     fi
 fi
 
