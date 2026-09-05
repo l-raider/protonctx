@@ -195,7 +195,9 @@ impl qobject::AppBackend {
     }
 
     fn load_games(mut self: Pin<&mut Self>) {
-        let games = crate::steam::discover_games();
+        let mut games = crate::steam::discover_games();
+        // Default view: sorted by game name, ascending (matches the C++ sort indicator).
+        games.sort_by(|a, b| sort_key(a, 0).cmp(&sort_key(b, 0)));
         let count = games.len();
 
         unsafe {

@@ -35,8 +35,9 @@ static QPointer<AppBackend>  s_backend;
 
 namespace {
 
+// Default view: sorted by Game name, ascending, matching `load_games()`.
 struct SortState {
-    int column = -1;
+    int column = 0;
     Qt::SortOrder order = Qt::AscendingOrder;
 };
 
@@ -160,7 +161,8 @@ extern "C" {
         table_view->horizontalHeader()->setStretchLastSection(true);
         table_view->horizontalHeader()->setSectionsClickable(true);
         table_view->horizontalHeader()->setSortIndicatorShown(true);
-        table_view->horizontalHeader()->setSortIndicator(-1, Qt::AscendingOrder);
+        // Game column starts sorted ascending; the model sorts the same way on load.
+        table_view->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
         table_view->verticalHeader()->setVisible(false);
         table_view->verticalHeader()->setDefaultSectionSize(28);
 
@@ -215,7 +217,12 @@ extern "C" {
             status_label->setText(backend->getStatus_text());
         });
         QObject::connect(backend, &AppBackend::selected_rowChanged, central_widget, sync_action_state);
-        QObject::connect(backend, &QAbstractItemModel::modelReset, central_widget, sync_action_state);
+        // On load/sort reset, re-fit the Game column so long names stay visible;
+        // the column stays Interactive so the user can still drag it.
+        QObject::connect(backend, &QAbstractItemModel::modelReset, central_widget, [table_view, sync_action_state]() {
+            table_view->resizeColumnToContents(0);
+            sync_action_state();
+        });
 
         // Launch errors surfaced as a message box.
         QObject::connect(backend, &AppBackend::launch_failed, window, [window](const QString& message) {
