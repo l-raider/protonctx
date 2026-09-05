@@ -29,12 +29,17 @@ CXXQT_INC=$(ls -dt target/*/build/protonctx-*/out/cxxqtbuild/include 2>/dev/null
 CXXQT_LIB_INC=$(ls -dt target/*/build/cxx-qt-lib-*/out/cxxqtbuild/include 2>/dev/null | head -1)
 CXXQT_CORE_INC=$(ls -dt target/*/build/cxx-qt-[0-9a-f]*/out/cxxqtbuild/include 2>/dev/null | head -1)
 
+# Same version define cxx-qt-build injects via build.rs (from Cargo.toml), so
+# clang-tidy/clazy see the same macro as the real build.
+PROTONCTX_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+
 ARGS=()
 for f in $QT_FLAGS; do ARGS+=("--extra-arg-before=$f"); done
 for d in "$CXXQT_INC" "$CXXQT_LIB_INC" "$CXXQT_CORE_INC"; do
     [[ -n "$d" && -d "$d" ]] && ARGS+=("--extra-arg-before=-I$d")
 done
 ARGS+=("--extra-arg-before=-std=c++17")
+ARGS+=("--extra-arg-before=-DPROTONCTX_VERSION=\"$PROTONCTX_VERSION\"")
 
 if [[ -z "$CXXQT_INC" ]]; then
     echo "warning: could not resolve cxx-qt include roots (run 'cargo build' first); skipping clang-tidy/clazy" >&2

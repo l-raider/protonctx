@@ -333,7 +333,13 @@ void qt_show_main_window() {
 
   s_backend = backend;
 
-  window->setWindowTitle(QStringLiteral("protonctx"));
+  // PROTONCTX_VERSION is defined by build.rs from CARGO_PKG_VERSION (Cargo.toml
+  // is the single source of truth for the version).
+#ifndef PROTONCTX_VERSION
+#error "PROTONCTX_VERSION must be defined by build.rs (from Cargo.toml)"
+#endif
+  window->setWindowTitle(QStringLiteral("protonctx v%1")
+                             .arg(QString::fromLatin1(PROTONCTX_VERSION)));
   window->resize(760, 520);
   window->setCentralWidget(central_widget);
   // Delete the window (and its child model) when it closes, so teardown happens
