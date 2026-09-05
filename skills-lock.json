@@ -1,6 +1,18 @@
 {
   "version": 1,
   "skills": {
+    "qt-cpp-docs": {
+      "source": "TheQtCompanyRnD/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/qt-cpp-docs/SKILL.md",
+      "computedHash": "523a73ac01f6310e2e29b316e701c754c2a692e43fa931a8b957275b6fa7c37b"
+    },
+    "qt-cpp-review": {
+      "source": "TheQtCompanyRnD/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/qt-cpp-review/SKILL.md",
+      "computedHash": "b1e0f87faf4fb912c93e4dca74790071be22627c334e52662da6fffc4ec8d0b7"
+    },
     "rust-skills": {
       "source": "leonardomso/rust-skills",
       "sourceType": "github",
