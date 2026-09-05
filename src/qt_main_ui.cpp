@@ -1,3 +1,4 @@
+#include <QtCore/QFileInfo>
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QPointer>
 #include <QtGui/QAction>
@@ -29,7 +30,7 @@
 // Dialogs live in their own translation units; declared here so the menu
 // actions in wire_signals() can call them.
 void show_about_dialog(QWidget *parent);
-void show_settings_dialog(QWidget *parent);
+void show_settings_dialog(QWidget *parent, AppBackend *backend);
 
 static int s_argc = 1;
 static char s_argv0[] = "protonctx";
@@ -238,17 +239,27 @@ void wire_signals(QMainWindow *window, QWidget *central_widget,
   // Browse...: pick a Windows executable and run it in the selected prefix.
   QObject::connect(
       browse_button, &QPushButton::clicked, window, [window, backend](bool) {
+        // Seed the dialog at the last directory when the "remember last
+        // directory" preference is enabled (default). Otherwise start at the
+        // default (home) directory.
+        const QString start_dir =
+            backend->getRemember_last_dir() ? backend->lastDir() : QString();
         const QString path = QFileDialog::getOpenFileName(
-            window, QStringLiteral("Select executable to run"), QString(),
+            window, QStringLiteral("Select executable to run"), start_dir,
             QStringLiteral("Windows executables (*.exe *.EXE *.bat *.cmd);;All "
                            "Files (*)"));
         if (!path.isEmpty()) {
+          // Remember the *directory* (not the file) for the next open.
+          if (backend->getRemember_last_dir()) {
+            backend->saveLastDir(QFileInfo(path).absolutePath());
+          }
           backend->browse_exe(path);
         }
       });
 
-  QObject::connect(settings_action, &QAction::triggered, window,
-                   [window](bool) { show_settings_dialog(window); });
+  QObject::connect(
+      settings_action, &QAction::triggered, window,
+      [window, backend](bool) { show_settings_dialog(window, backend); });
   QObject::connect(about_action, &QAction::triggered, window,
                    [window](bool) { show_about_dialog(window); });
 }

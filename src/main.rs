@@ -5,6 +5,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod app_backend;
+mod config;
 mod launcher;
 mod models;
 mod steam;

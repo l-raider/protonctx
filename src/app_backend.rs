@@ -67,6 +67,7 @@ pub mod qobject {
         #[qproperty(i32, selected_row)]
         #[qproperty(QString, status_text)]
         #[qproperty(QString, app_version)]
+        #[qproperty(bool, remember_last_dir)]
         type AppBackend = super::AppBackendRust;
 
         // QAbstractTableModel overrides.
@@ -123,6 +124,15 @@ pub mod qobject {
         fn launch_tool(self: Pin<&mut AppBackend>, arg: &QString);
         #[qinvokable]
         fn browse_exe(self: Pin<&mut AppBackend>, path: &QString);
+        #[qinvokable]
+        #[cxx_name = "lastDir"]
+        fn last_dir(self: &AppBackend) -> QString;
+        #[qinvokable]
+        #[cxx_name = "saveLastDir"]
+        fn save_last_dir(self: Pin<&mut AppBackend>, path: &QString);
+        #[qinvokable]
+        #[cxx_name = "applyRememberLastDir"]
+        fn apply_remember_last_dir(self: Pin<&mut AppBackend>, enabled: bool);
     }
 
     impl cxx_qt::Threading for AppBackend {}
@@ -138,6 +148,8 @@ pub struct AppBackendRust {
     status_text: QString,
     /// Application version, shown in the About dialog.
     app_version: QString,
+    /// Whether the "Browse…" file picker remembers (and reopens at) the last directory.
+    remember_last_dir: bool,
     /// Cached `roleNames()` map — roles never change, so build it once.
     role_names: QHash<QHashPair_i32_QByteArray>,
     /// Monotonic load-generation counter used to discard stale async results.
@@ -148,11 +160,13 @@ impl Default for AppBackendRust {
     fn default() -> Self {
         let mut role_names = QHash::<QHashPair_i32_QByteArray>::default();
         role_names.insert(ROLE_DISPLAY, QByteArray::from("display"));
+        let config = crate::config::load_config();
         Self {
             games: Vec::new(),
             selected_row: -1,
             status_text: QString::from("Ready"),
             app_version: QString::from(env!("CARGO_PKG_VERSION")),
+            remember_last_dir: config.remember_last_dir,
             role_names,
             load_generation: 0,
         }
@@ -399,6 +413,38 @@ impl qobject::AppBackend {
                 let msg = QString::from(&format!("Failed to launch: {e}"));
                 self.as_mut().launch_failed(&msg);
             }
+        }
+    }
+
+    /// The remembered last directory (from `state.json`), or an empty string when
+    /// none has been recorded. The C++ side seeds the "Browse…" dialog with this.
+    fn last_dir(&self) -> QString {
+        crate::config::load_last_dir()
+            .map(|p| QString::from(&p.to_string_lossy().into_owned()))
+            .unwrap_or_default()
+    }
+
+    /// Persist the directory the user picked (the parent directory of the selected
+    /// file) so the next "Browse…" open starts there. No-op when the feature is off.
+    fn save_last_dir(self: Pin<&mut Self>, path: &QString) {
+        if !self.rust().remember_last_dir {
+            return;
+        }
+        let dir = std::path::PathBuf::from(path.to_string());
+        if let Err(e) = crate::config::save_last_dir(&dir) {
+            eprintln!("protonctx: failed to save last directory: {e}");
+        }
+    }
+
+    /// Toggle the "remember last directory" preference and persist it immediately so
+    /// the checkbox state survives restarts even if the app is killed before exit.
+    fn apply_remember_last_dir(mut self: Pin<&mut Self>, enabled: bool) {
+        self.as_mut().set_remember_last_dir(enabled);
+        let config = crate::config::AppConfig {
+            remember_last_dir: enabled,
+        };
+        if let Err(e) = crate::config::save_config(&config) {
+            eprintln!("protonctx: failed to save config: {e}");
         }
     }
 }
