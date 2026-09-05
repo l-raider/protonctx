@@ -170,7 +170,11 @@ impl qobject::AppBackend {
             2 => display_compat_tool(game),
             _ => return QVariant::default(),
         };
-        QVariant::from(&QString::from(&text))
+        // Build an owned QString first, then wrap it in a QVariant. Previously
+        // `QVariant::from(&QString::from(&text))` bound the QVariant to a
+        // temporary, which cxx-qt did not guarantee would outlive the call.
+        let qstring = QString::from(&text);
+        QVariant::from(&qstring)
     }
 
     fn header_data(&self, section: i32, orientation: Orientation, role: i32) -> QVariant {
@@ -221,7 +225,11 @@ impl qobject::AppBackend {
     }
 
     fn select_row(mut self: Pin<&mut Self>, row: i32) {
-        self.as_mut().set_selected_row(row);
+        // Guard the index space: `-1` clears selection, anything >= len is
+        // clamped to `-1` so a stale row can never select the wrong game.
+        let len = self.rust().games.len() as i32;
+        let clamped = if row < -1 || row >= len { -1 } else { row };
+        self.as_mut().set_selected_row(clamped);
     }
 
     fn selected_app_id(&self, row: i32) -> u32 {

@@ -1,5 +1,3 @@
-#include <memory>
-
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QPointer>
 #include <QtGui/QAction>
@@ -22,6 +20,8 @@
 #include <QtWidgets/QTableView>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
+
+#include <memory>
 
 #include "protonctx/src/app_backend.cxxqt.h"
 
