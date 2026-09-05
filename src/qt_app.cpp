@@ -49,7 +49,7 @@ struct SortState {
 
 struct ToolButton {
   const char *label;
-  const char *arg;
+  const char *tool_id;
 };
 
 constexpr ToolButton k_tool_buttons[] = {
@@ -146,10 +146,15 @@ void qt_show_main_window() {
 
   std::vector<QPushButton *> tool_buttons;
   tool_buttons.reserve(std::size(k_tool_buttons));
+  // Build each tool button and wire its click to `launch_tool` in one pass, so
+  // the two loops can never drift out of sync.
   for (const auto &tool : k_tool_buttons) {
     auto *button = new QPushButton(QString::fromLatin1(tool.label));
     actions_layout->addWidget(button);
     tool_buttons.push_back(button);
+    const QString tool_id = QString::fromLatin1(tool.tool_id);
+    QObject::connect(button, &QPushButton::clicked, backend,
+                     [backend, tool_id](bool) { backend->launch_tool(tool_id); });
   }
   actions_layout->addStretch();
 
@@ -262,11 +267,7 @@ void qt_show_main_window() {
       });
 
   // Each tool button launches its Wine built-in in the selected prefix.
-  for (std::size_t i = 0; i < tool_buttons.size(); ++i) {
-    const QString arg = QString::fromLatin1(k_tool_buttons[i].arg);
-    QObject::connect(tool_buttons[i], &QPushButton::clicked, backend,
-                     [backend, arg](bool) { backend->launch_tool(arg); });
-  }
+  // See the creation loop above — connects are wired there.
 
   QObject::connect(settings_action, &QAction::triggered, window,
                    [window](bool) { show_settings_dialog(window); });
@@ -278,6 +279,9 @@ void qt_show_main_window() {
   window->setWindowTitle(QStringLiteral("protonctx"));
   window->resize(760, 520);
   window->setCentralWidget(central_widget);
+  // Delete the window (and its child model) when it closes, so teardown happens
+  // before QApplication destruction rather than during s_app.reset().
+  window->setAttribute(Qt::WA_DeleteOnClose);
 
   sync_action_state();
   status_label->setText(backend->getStatus_text());
@@ -285,7 +289,7 @@ void qt_show_main_window() {
 }
 
 void qt_load_games() {
-  if (s_backend) {
+  if (s_main_window && s_backend) {
     s_backend->load_games();
   }
 }

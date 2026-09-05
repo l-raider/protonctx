@@ -21,6 +21,17 @@ use crate::models::Game;
 // Qt::DisplayRole — the only role this model reports.
 const ROLE_DISPLAY: i32 = 0;
 
+/// Column indexes for the games table (Game | App ID | Compatibility Tool).
+///
+/// `column_count` reports [`column::COUNT`]; adding a column is a single-point
+/// edit here plus a new arm in `data`/`header_data`/`sort_key`.
+mod column {
+    pub const NAME: usize = 0;
+    pub const APP_ID: usize = 1;
+    pub const COMPAT_TOOL: usize = 2;
+    pub const COUNT: usize = 3;
+}
+
 #[cxx_qt::bridge]
 pub mod qobject {
     unsafe extern "C++Qt" {
@@ -146,8 +157,7 @@ impl qobject::AppBackend {
         if parent.is_valid() {
             return 0;
         }
-        // Game | App ID | Compatibility Tool
-        3
+        column::COUNT as i32
     }
 
     fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
@@ -164,10 +174,10 @@ impl qobject::AppBackend {
             return QVariant::default();
         }
 
-        let text = match index.column() {
-            0 => game.name.clone(),
-            1 => game.app_id.to_string(),
-            2 => display_compat_tool(game),
+        let text = match index.column() as usize {
+            column::NAME => game.name.clone(),
+            column::APP_ID => game.app_id.to_string(),
+            column::COMPAT_TOOL => display_compat_tool(game),
             _ => return QVariant::default(),
         };
         // Build an owned QString first, then wrap it in a QVariant. Previously
@@ -186,10 +196,10 @@ impl qobject::AppBackend {
             return QVariant::from(&(section + 1));
         }
 
-        let label = match section {
-            0 => Some(QString::from("Game")),
-            1 => Some(QString::from("App ID")),
-            2 => Some(QString::from("Compatibility Tool")),
+        let label = match section as usize {
+            column::NAME => Some(QString::from("Game")),
+            column::APP_ID => Some(QString::from("App ID")),
+            column::COMPAT_TOOL => Some(QString::from("Compatibility Tool")),
             _ => None,
         };
         label.map(|text| QVariant::from(&text)).unwrap_or_default()
@@ -204,7 +214,7 @@ impl qobject::AppBackend {
     fn load_games(mut self: Pin<&mut Self>) {
         let mut games = crate::steam::discover_games();
         // Default view: sorted by game name, ascending (matches the C++ sort indicator).
-        games.sort_by_key(|game| sort_key(game, 0));
+        games.sort_by_key(|game| sort_key(game, column::NAME));
         let count = games.len();
 
         unsafe {
@@ -267,25 +277,41 @@ impl qobject::AppBackend {
 
     fn launch_tool(mut self: Pin<&mut Self>, arg: &QString) {
         let Some(game) = self.rust().selected_game() else {
+            let msg = QString::from("No game selected");
+            self.as_mut().launch_failed(&msg);
             return;
         };
 
         let tool = arg.to_string();
-        if let Err(e) = launcher::launch_tool(game, &tool) {
-            let msg = QString::from(&format!("Failed to launch {tool}: {e}"));
-            self.as_mut().launch_failed(&msg);
+        match launcher::launch_tool(game, &tool) {
+            Ok(()) => {
+                self.as_mut()
+                    .set_status_text(QString::from(&format!("Launching {tool}...")));
+            }
+            Err(e) => {
+                let msg = QString::from(&format!("Failed to launch {tool}: {e}"));
+                self.as_mut().launch_failed(&msg);
+            }
         }
     }
 
     fn browse_exe(mut self: Pin<&mut Self>, path: &QString) {
         let Some(game) = self.rust().selected_game() else {
+            let msg = QString::from("No game selected");
+            self.as_mut().launch_failed(&msg);
             return;
         };
 
         let path = path.to_string();
-        if let Err(e) = launcher::proton::run_in_prefix(game, &[&path]) {
-            let msg = QString::from(&format!("Failed to launch: {e}"));
-            self.as_mut().launch_failed(&msg);
+        match launcher::proton::run_in_prefix(game, &[&path]) {
+            Ok(()) => {
+                self.as_mut()
+                    .set_status_text(QString::from(&format!("Launching {path}...")));
+            }
+            Err(e) => {
+                let msg = QString::from(&format!("Failed to launch: {e}"));
+                self.as_mut().launch_failed(&msg);
+            }
         }
     }
 }
@@ -301,12 +327,12 @@ impl AppBackendRust {
     }
 }
 
-/// The sort key for a given column index (0 = game, 1 = app id, 2 = compat tool).
+/// The sort key for a given column index ([`column::NAME`], [`column::APP_ID`], [`column::COMPAT_TOOL`]).
 fn sort_key(game: &Game, column: usize) -> String {
     match column {
-        0 => game.name.to_lowercase(),
-        1 => format!("{:010}", game.app_id),
-        2 => display_compat_tool(game).to_lowercase(),
+        column::NAME => game.name.to_lowercase(),
+        column::APP_ID => format!("{:010}", game.app_id),
+        column::COMPAT_TOOL => display_compat_tool(game).to_lowercase(),
         _ => String::new(),
     }
 }
