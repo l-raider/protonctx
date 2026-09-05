@@ -358,6 +358,10 @@ impl qobject::AppBackend {
         }
 
         let col = column as usize;
+        // Remember which game is selected so it can be re-selected at its new
+        // row after the reorder (a model reset clears the view's selection).
+        let selected_app_id = self.rust().selected_game().map(|game| game.app_id);
+
         unsafe {
             self.as_mut().begin_reset_model();
         }
@@ -370,10 +374,17 @@ impl qobject::AppBackend {
                 b_val.cmp(&a_val)
             }
         });
+        // Re-select the same game at its new row. This must happen before
+        // end_reset_model() so the modelReset handler on the C++ side sees the
+        // updated row and can restore the view selection.
+        let new_row = selected_app_id
+            .and_then(|id| self.rust().games.iter().position(|game| game.app_id == id))
+            .map(|row| row as i32)
+            .unwrap_or(-1);
+        self.as_mut().set_selected_row(new_row);
         unsafe {
             self.as_mut().end_reset_model();
         }
-        self.as_mut().set_selected_row(-1);
     }
 
     fn launch_tool(mut self: Pin<&mut Self>, arg: &QString) {

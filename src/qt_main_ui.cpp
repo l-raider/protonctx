@@ -214,18 +214,35 @@ void wire_signals(QMainWindow *window, QWidget *central_widget,
                    });
   QObject::connect(backend, &AppBackend::selected_rowChanged, central_widget,
                    sync_action_state);
-  // On load/sort reset, re-fit the Game column so long names stay visible;
-  // the column stays Interactive so the user can still drag it.
+  // On load/sort reset, re-fit the Game column on the first load so long names
+  // stay visible, then leave the widths alone so sorting (or any later reset)
+  // never clobbers a width the user has dragged. The column stays Interactive
+  // so the user can always resize it manually.
+  auto did_initial_fit = std::make_shared<bool>(false);
   QObject::connect(backend, &QAbstractItemModel::modelReset, central_widget,
-                   [table_view, sync_action_state]() {
-                     table_view->resizeColumnToContents(0);
-                     // A model reset clears the selection, but when the window
-                     // next gains focus QAbstractItemView::focusInEvent
-                     // auto-selects row 0 if no current index is set. Mark the
-                     // current index as deliberately unset so no row is
-                     // selected by default.
-                     table_view->setCurrentIndex(QModelIndex());
-                     table_view->selectionModel()->clearSelection();
+                   [table_view, backend, sync_action_state,
+                    did_initial_fit]() {
+                     if (!*did_initial_fit) {
+                       table_view->resizeColumnToContents(0);
+                       *did_initial_fit = true;
+                     }
+                     // A model reset clears the view's selection. Restore the
+                     // row the backend still considers selected: sort_by
+                     // re-selects the same game at its new row before the reset
+                     // fires, so sorting keeps the current row selected.
+                     const int row = backend->getSelected_row();
+                     if (row >= 0) {
+                       const QModelIndex idx = backend->index(row, 0);
+                       table_view->setCurrentIndex(idx);
+                       table_view->selectionModel()->select(
+                           idx, QItemSelectionModel::ClearAndSelect |
+                                    QItemSelectionModel::Rows);
+                     } else {
+                       // No selection: mark the current index as deliberately
+                       // unset so focusInEvent won't auto-select row 0.
+                       table_view->setCurrentIndex(QModelIndex());
+                       table_view->selectionModel()->clearSelection();
+                     }
                      sync_action_state();
                    });
 
