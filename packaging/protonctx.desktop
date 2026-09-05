@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=protonctx
+GenericName=Proton Context Launcher
+Comment=Launch executables inside a Steam game's Proton context
+Exec=protonctx
+Icon=protonctx
+Terminal=false
+Categories=Utility;Game;
+Keywords=Steam;Proton;Wine;Game;

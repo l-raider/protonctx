@@ -31,3 +31,47 @@ cxx = "=1.0"
 dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
+
+# --- Debian packaging (cargo-deb) ---
+# The binary is listed explicitly to ensure it is packed
+# regardless of cargo-deb's auto-detection. Qt6 runtime libraries are pulled in
+# automatically via `depends = "$auto"` (requires dpkg-shlibdeps on the build
+# host — use a Debian/Ubuntu machine to get populated Depends).
+[package.metadata.deb]
+name = "protonctx"
+depends = "$auto"
+section = "utils"
+priority = "optional"
+maintainer = "protonctx maintainers"
+extended-description = """\
+Helper GUI tool to launch executables inside a Steam game's Proton context."""
+assets = [
+    ["target/release/protonctx", "usr/bin/protonctx", "755"],
+    ["packaging/protonctx.desktop", "usr/share/applications/protonctx.desktop", "644"],
+    ["packaging/icons/hicolor/16x16/apps/protonctx.png", "usr/share/icons/hicolor/16x16/apps/protonctx.png", "644"],
+    ["packaging/icons/hicolor/24x24/apps/protonctx.png", "usr/share/icons/hicolor/24x24/apps/protonctx.png", "644"],
+    ["packaging/icons/hicolor/32x32/apps/protonctx.png", "usr/share/icons/hicolor/32x32/apps/protonctx.png", "644"],
+    ["packaging/icons/hicolor/48x48/apps/protonctx.png", "usr/share/icons/hicolor/48x48/apps/protonctx.png", "644"],
+    ["packaging/icons/hicolor/64x64/apps/protonctx.png", "usr/share/icons/hicolor/64x64/apps/protonctx.png", "644"],
+    ["packaging/icons/hicolor/128x128/apps/protonctx.png", "usr/share/icons/hicolor/128x128/apps/protonctx.png", "644"],
+    ["packaging/icons/hicolor/256x256/apps/protonctx.png", "usr/share/icons/hicolor/256x256/apps/protonctx.png", "644"],
+    ["packaging/icons/hicolor/scalable/apps/protonctx.svg", "usr/share/icons/hicolor/scalable/apps/protonctx.svg", "644"],
+]
+
+# --- RPM packaging (cargo-generate-rpm) ---
+[package.metadata.generate-rpm]
+name = "protonctx"
+release = "1"
+summary = "Launch executables inside a Steam game's Proton context."
+assets = [
+    { source = "target/release/protonctx", dest = "/usr/bin/protonctx", mode = "755" },
+    { source = "packaging/protonctx.desktop", dest = "/usr/share/applications/protonctx.desktop", mode = "644" },
+    { source = "packaging/icons/hicolor/16x16/apps/protonctx.png", dest = "/usr/share/icons/hicolor/16x16/apps/protonctx.png", mode = "644" },
+    { source = "packaging/icons/hicolor/24x24/apps/protonctx.png", dest = "/usr/share/icons/hicolor/24x24/apps/protonctx.png", mode = "644" },
+    { source = "packaging/icons/hicolor/32x32/apps/protonctx.png", dest = "/usr/share/icons/hicolor/32x32/apps/protonctx.png", mode = "644" },
+    { source = "packaging/icons/hicolor/48x48/apps/protonctx.png", dest = "/usr/share/icons/hicolor/48x48/apps/protonctx.png", mode = "644" },
+    { source = "packaging/icons/hicolor/64x64/apps/protonctx.png", dest = "/usr/share/icons/hicolor/64x64/apps/protonctx.png", mode = "644" },
+    { source = "packaging/icons/hicolor/128x128/apps/protonctx.png", dest = "/usr/share/icons/hicolor/128x128/apps/protonctx.png", mode = "644" },
+    { source = "packaging/icons/hicolor/256x256/apps/protonctx.png", dest = "/usr/share/icons/hicolor/256x256/apps/protonctx.png", mode = "644" },
+    { source = "packaging/icons/hicolor/scalable/apps/protonctx.svg", dest = "/usr/share/icons/hicolor/scalable/apps/protonctx.svg", mode = "644" },
+]

@@ -27,6 +27,18 @@ Requirements:
 cargo build --release
 ```
 
+## Packaging
+
+Debian and RPM packages are built with `cargo-deb` and `cargo-generate-rpm`
+(installed separately: `cargo install cargo-deb cargo-generate-rpm`). Icon PNGs
+are rendered from `ui/icon/icon.svg` at build time, so `rsvg-convert`
+(`librsvg2-tools`) or ImageMagick `convert` is also required.
+
+```sh
+./build-deb.sh    # -> target/debian/protonctx_*.deb
+./build-rpm.sh    # -> target/generate-rpm/protonctx-*.rpm
+```
+
 ## Usage
 
 ```sh
