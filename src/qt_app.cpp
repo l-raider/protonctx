@@ -138,29 +138,30 @@ void setup_context_menu(QTableView *table_view, AppBackend *backend,
         table_view->setCurrentIndex(index);
 
         QMenu menu(table_view);
-        menu.addAction(QStringLiteral("Browse for executable..."),
+        menu.addAction(QStringLiteral("Browse for executable..."), &menu,
                        [browse_button] { browse_button->click(); });
         menu.addSeparator();
         for (const auto &tool : k_tool_buttons) {
           const QString tool_id = QString::fromLatin1(tool.tool_id);
-          menu.addAction(QString::fromLatin1(tool.label),
+          menu.addAction(QString::fromLatin1(tool.label), &menu,
                          [backend, tool_id] { backend->launch_tool(tool_id); });
         }
         menu.addSeparator();
         menu.addAction(
-            QStringLiteral("Copy compatdata path"), [backend, index] {
+            QStringLiteral("Copy compatdata path"), &menu, [backend, index] {
               const QString path = backend->compatDataPath(index.row());
               if (!path.isEmpty()) {
                 QGuiApplication::clipboard()->setText(path);
               }
             });
-        menu.addAction(
-            QStringLiteral("Copy compatibility tool path"), [backend, index] {
-              const QString path = backend->protonDirPath(index.row());
-              if (!path.isEmpty()) {
-                QGuiApplication::clipboard()->setText(path);
-              }
-            });
+        menu.addAction(QStringLiteral("Copy compatibility tool path"), &menu,
+                       [backend, index] {
+                         const QString path =
+                             backend->protonDirPath(index.row());
+                         if (!path.isEmpty()) {
+                           QGuiApplication::clipboard()->setText(path);
+                         }
+                       });
         menu.exec(table_view->viewport()->mapToGlobal(pos));
       });
 }

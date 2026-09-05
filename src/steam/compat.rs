@@ -273,7 +273,6 @@ mod tests {
             std::process::id()
         ));
         let steamapps = root.join("steamapps");
-        let common = steamapps.join("common");
         // Mirrors the real install: display name "Proton Experimental" → install
         // dir "Proton - Experimental" (appid 1493710). Appmanifest lives in
         // `steamapps/`, install dir in `steamapps/common/`.
