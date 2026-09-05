@@ -3,6 +3,8 @@
 #include <QtGui/QAction>
 #include <QtGui/QIcon>
 #include <QtWidgets/QAbstractItemView>
+#include <QtGui/QClipboard>
+#include <QtGui/QGuiApplication>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
@@ -57,7 +59,7 @@ constexpr ToolButton k_tool_buttons[] = {
     {"Explorer", "explorer"},
     {"Registry Editor", "regedit"},
     {"Task Manager", "taskmgr"},
-    {"winecfg", "winecfg"},
+    {"Wine Configuration", "winecfg"},
 };
 
 void show_about_dialog(QWidget *parent) {
@@ -115,6 +117,46 @@ void setup_table(QTableView *table_view) {
   table_view->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
   table_view->verticalHeader()->setVisible(false);
   table_view->verticalHeader()->setDefaultSectionSize(28);
+  // Right-click pops a context menu (see setup_context_menu).
+  table_view->setContextMenuPolicy(Qt::CustomContextMenu);
+}
+
+// Right-click context menu for a table row. Mirrors the action-row buttons
+// (Browse... + the built-in Wine tools) plus "Copy compatibility path", which
+// has no button. Selecting a tool launches it in the row's prefix, exactly like
+// the corresponding button would.
+void setup_context_menu(QTableView *table_view, AppBackend *backend,
+                        QPushButton *browse_button) {
+  QObject::connect(
+      table_view, &QTableView::customContextMenuRequested, table_view,
+      [table_view, backend, browse_button](const QPoint &pos) {
+        const QModelIndex index = table_view->indexAt(pos);
+        if (!index.isValid()) {
+          return;
+        }
+        // Right-clicking selects the row, so the menu acts on it.
+        table_view->setCurrentIndex(index);
+
+        QMenu menu(table_view);
+        menu.addAction(QStringLiteral("Browse for executable..."), [browse_button] {
+          browse_button->click();
+        });
+        menu.addSeparator();
+        for (const auto &tool : k_tool_buttons) {
+          const QString tool_id = QString::fromLatin1(tool.tool_id);
+          menu.addAction(QString::fromLatin1(tool.label),
+                         [backend, tool_id] { backend->launch_tool(tool_id); });
+        }
+        menu.addSeparator();
+        menu.addAction(QStringLiteral("Copy compatdata path"),
+                       [backend, index] {
+                         const QString path = backend->compatDataPath(index.row());
+                         if (!path.isEmpty()) {
+                           QGuiApplication::clipboard()->setText(path);
+                         }
+                       });
+        menu.exec(table_view->viewport()->mapToGlobal(pos));
+      });
 }
 
 // Build the action row (Browse... + one button per built-in Wine tool) and wire
@@ -285,6 +327,7 @@ void qt_show_main_window() {
 
   table_view->setModel(backend);
   setup_table(table_view);
+  setup_context_menu(table_view, backend, browse_button);
 
   // Table first, action buttons below it.
   main_layout->addWidget(table_view, 1);

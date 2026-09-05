@@ -112,6 +112,9 @@ pub mod qobject {
         #[cxx_name = "selectedAppId"]
         fn selected_app_id(self: &AppBackend, row: i32) -> u32;
         #[qinvokable]
+        #[cxx_name = "compatDataPath"]
+        fn compat_data_path(self: &AppBackend, row: i32) -> QString;
+        #[qinvokable]
         fn sort_by(self: Pin<&mut AppBackend>, column: i32, ascending: bool);
         #[qinvokable]
         fn launch_tool(self: Pin<&mut AppBackend>, arg: &QString);
@@ -298,6 +301,26 @@ impl qobject::AppBackend {
             .get(row as usize)
             .map(|game| game.app_id)
             .unwrap_or(0)
+    }
+
+    /// The absolute path of the game's compatibility (prefix) directory, i.e.
+    /// `<steam_root>/steamapps/compatdata/<app_id>`, or an empty string if the row is
+    /// out of range. `compatdata` always lives under the Steam *root* (never a secondary
+    /// library), so we prefer `find_steam_root()` and only fall back to the game's own
+    /// `library_path` when that lookup fails.
+    fn compat_data_path(&self, row: i32) -> QString {
+        let Some(game) = self.rust().games.get(row as usize) else {
+            return QString::default();
+        };
+
+        let root = crate::steam::locations::find_steam_root()
+            .unwrap_or_else(|| std::path::PathBuf::from(&game.library_path));
+        let path = root
+            .join("steamapps")
+            .join("compatdata")
+            .join(game.app_id.to_string());
+
+        QString::from(&path.to_string_lossy().into_owned())
     }
 
     fn sort_by(mut self: Pin<&mut Self>, column: i32, ascending: bool) {
