@@ -1,5 +1,9 @@
 //! protonctx — launch executables inside a Steam game's Proton context.
 
+// Test fixtures may panic on setup failure (`unwrap` is fine in tests); the
+// `unwrap_used = "deny"` workspace lint applies to production code only.
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 mod app_backend;
 mod launcher;
 mod models;

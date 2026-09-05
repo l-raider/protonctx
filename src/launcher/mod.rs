@@ -33,7 +33,14 @@ impl std::fmt::Display for LaunchError {
     }
 }
 
-impl std::error::Error for LaunchError {}
+impl std::error::Error for LaunchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LaunchError::NoProtonDir => None,
+            LaunchError::Spawn { source, .. } => Some(source),
+        }
+    }
+}
 
 /// Launch a built-in Wine tool (e.g. `winecfg`) in the game's prefix.
 pub fn launch_tool(game: &Game, tool: &str) -> Result<(), LaunchError> {

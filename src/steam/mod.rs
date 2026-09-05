@@ -34,7 +34,14 @@ impl std::fmt::Display for SteamError {
     }
 }
 
-impl std::error::Error for SteamError {}
+impl std::error::Error for SteamError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SteamError::Io(e) => Some(e),
+            SteamError::Parse(_) | SteamError::SteamNotFound => None,
+        }
+    }
+}
 
 impl From<std::io::Error> for SteamError {
     fn from(e: std::io::Error) -> Self {
@@ -111,9 +118,20 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
                 .cloned()
                 .unwrap_or_default();
 
-            let proton_dir = compatdata::proton_dir_for(library, app.app_id)?
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default();
+            let proton_dir = match compatdata::proton_dir_for(library, app.app_id) {
+                Ok(Some(p)) => p.to_string_lossy().into_owned(),
+                Ok(None) => String::new(),
+                Err(e) => {
+                    // A bad `compatdata/<id>/config_info` (e.g. permission denied)
+                    // must not abort the whole discovery — just leave the prefix
+                    // unresolved for this one game, like a manifest error does.
+                    eprintln!(
+                        "protonctx: failed to resolve proton dir for app {}: {e}",
+                        app.app_id
+                    );
+                    String::new()
+                }
+            };
 
             games.push(Game {
                 name: app.name,

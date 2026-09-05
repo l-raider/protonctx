@@ -6,6 +6,10 @@ license = "GPL-3.0-only"
 description = "Launch executables inside a Steam game's Proton context"
 repository = "local"
 
+# Opt into the workspace lints (clippy denies below).
+[lints]
+workspace = true
+
 [dependencies]
 cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }

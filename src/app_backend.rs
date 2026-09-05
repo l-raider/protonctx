@@ -193,7 +193,8 @@ impl qobject::AppBackend {
         }
 
         if orientation == Orientation::Vertical {
-            return QVariant::from(&(section + 1));
+            let row = section + 1;
+            return QVariant::from(&row);
         }
 
         let label = match section as usize {
