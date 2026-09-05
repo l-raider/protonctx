@@ -46,10 +46,10 @@ struct ToolButton {
 };
 
 constexpr ToolButton k_tool_buttons[] = {
-    {"winecfg", "winecfg"},
-    {"Task Manager", "taskmgr"},
     {"Explorer", "explorer"},
     {"Registry Editor", "regedit"},
+    {"Task Manager", "taskmgr"},
+    {"winecfg", "winecfg"},
 };
 
 void show_about_dialog(QWidget* parent)
@@ -115,7 +115,7 @@ extern "C" {
         auto* window = s_main_window.data();
         auto* central_widget = new QWidget(window);
         auto* main_layout = new QVBoxLayout(central_widget);
-        auto* toolbar_layout = new QHBoxLayout();
+        auto* actions_layout = new QHBoxLayout();
         auto* table_view = new QTableView();
         auto* backend = new AppBackend(central_widget);
         auto* status_label = new QLabel();
@@ -133,20 +133,21 @@ extern "C" {
 
         main_layout->setContentsMargins(6, 6, 6, 6);
         main_layout->setSpacing(4);
-        toolbar_layout->setSpacing(4);
+        actions_layout->setSpacing(4);
 
-        // Action bar: Browse... plus one button per built-in Wine tool.
+        // Action row: Browse... plus one button per built-in Wine tool,
+        // placed below the table.
         auto* browse_button = new QPushButton(QStringLiteral("Browse..."));
-        toolbar_layout->addWidget(browse_button);
+        actions_layout->addWidget(browse_button);
 
         std::vector<QPushButton*> tool_buttons;
         tool_buttons.reserve(std::size(k_tool_buttons));
         for (const auto& tool : k_tool_buttons) {
             auto* button = new QPushButton(QString::fromLatin1(tool.label));
-            toolbar_layout->addWidget(button);
+            actions_layout->addWidget(button);
             tool_buttons.push_back(button);
         }
-        toolbar_layout->addStretch();
+        actions_layout->addStretch();
 
         status_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
         selection_label->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -163,8 +164,9 @@ extern "C" {
         table_view->verticalHeader()->setVisible(false);
         table_view->verticalHeader()->setDefaultSectionSize(28);
 
-        main_layout->addLayout(toolbar_layout);
+        // Table first, action buttons below it.
         main_layout->addWidget(table_view, 1);
+        main_layout->addLayout(actions_layout);
 
         window->statusBar()->addWidget(status_label, 1);
         window->statusBar()->addPermanentWidget(selection_label);
