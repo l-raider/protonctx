@@ -122,7 +122,7 @@ void setup_table(QTableView *table_view) {
 }
 
 // Right-click context menu for a table row. Mirrors the action-row buttons
-// (Browse... + the built-in Wine tools) plus "Copy compatibility path", which
+// (Browse... + the built-in Wine tools) plus "Copy compatdata path", which
 // has no button. Selecting a tool launches it in the row's prefix, exactly like
 // the corresponding button would.
 void setup_context_menu(QTableView *table_view, AppBackend *backend,
