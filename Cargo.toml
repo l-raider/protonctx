@@ -14,13 +14,13 @@ workspace = true
 cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
 steam-vdf-parser = "0.1"
-cxx = "=1.0"
-cxx-gen = "=0.7"
+cxx = "1.0"
+cxx-gen = "0.7"
 
 [build-dependencies]
 cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
 # Must match [dependencies] cxx pin.
-cxx = "=1.0"
+cxx = "1.0"
 
 # [profile.release]
 # lto = true
