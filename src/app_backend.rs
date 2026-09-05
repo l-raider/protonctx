@@ -216,7 +216,8 @@ impl qobject::AppBackend {
         // thread rather than blocking the GUI thread before the event loop runs.
         // Results are delivered back onto the Qt event loop via `CxxQtThread`;
         // the model must only be mutated on the GUI thread.
-        self.as_mut().set_status_text(QString::from("Loading games..."));
+        self.as_mut()
+            .set_status_text(QString::from("Loading games..."));
 
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {

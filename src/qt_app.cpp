@@ -133,14 +133,15 @@ void build_action_row(QHBoxLayout *actions_layout, AppBackend *backend,
     actions_layout->addWidget(button);
     tool_buttons->push_back(button);
     const QString tool_id = QString::fromLatin1(tool.tool_id);
-    QObject::connect(button, &QPushButton::clicked, backend,
-                     [backend, tool_id](bool) { backend->launch_tool(tool_id); });
+    QObject::connect(
+        button, &QPushButton::clicked, backend,
+        [backend, tool_id](bool) { backend->launch_tool(tool_id); });
   }
   actions_layout->addStretch();
 }
 
-// Wire all remaining signals (selection, sorting, status, resets, launch errors,
-// browse, and the Settings/About actions).
+// Wire all remaining signals (selection, sorting, status, resets, launch
+// errors, browse, and the Settings/About actions).
 void wire_signals(QMainWindow *window, QWidget *central_widget,
                   QTableView *table_view, AppBackend *backend,
                   QLabel *status_label, QLabel *selection_label,

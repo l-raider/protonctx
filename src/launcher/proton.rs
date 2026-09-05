@@ -37,7 +37,10 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
 
     match cmd.spawn() {
         Ok(_) => Ok(()),
-        Err(source) => Err(LaunchError::Spawn { path: proton, source }),
+        Err(source) => Err(LaunchError::Spawn {
+            path: proton,
+            source,
+        }),
     }
 }
 
