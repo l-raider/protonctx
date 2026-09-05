@@ -200,7 +200,7 @@ impl qobject::AppBackend {
     fn load_games(mut self: Pin<&mut Self>) {
         let mut games = crate::steam::discover_games();
         // Default view: sorted by game name, ascending (matches the C++ sort indicator).
-        games.sort_by(|a, b| sort_key(a, 0).cmp(&sort_key(b, 0)));
+        games.sort_by_key(|game| sort_key(game, 0));
         let count = games.len();
 
         unsafe {
@@ -313,13 +313,12 @@ fn display_compat_tool(game: &Game) -> String {
         return game.compat_tool.clone();
     }
 
-    if !game.proton_dir.is_empty() {
-        if let Some(name) = std::path::Path::new(&game.proton_dir)
+    if !game.proton_dir.is_empty()
+        && let Some(name) = std::path::Path::new(&game.proton_dir)
             .file_name()
             .and_then(|n| n.to_str())
-        {
-            return format!("{name} (default)");
-        }
+    {
+        return format!("{name} (default)");
     }
 
     "(default)".to_string()
