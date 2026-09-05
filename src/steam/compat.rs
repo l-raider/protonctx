@@ -34,11 +34,7 @@ pub fn proton_dir_for_tool(steam_root: &Path, tool: &str) -> Option<PathBuf> {
     let common = steam_root.join("steamapps").join("common");
     let builtin = manifest_for_builtin(&common, tool)?;
     let dir = common.join(builtin);
-    if dir.is_dir() {
-        Some(dir)
-    } else {
-        None
-    }
+    if dir.is_dir() { Some(dir) } else { None }
 }
 
 /// Find an installed built-in tool matching an internal name like `"proton_experimental"`.
@@ -232,8 +228,12 @@ mod tests {
     // --- proton_dir_for_tool ---
 
     /// Write an `appmanifest_<appid>.acf` for a built-in tool inside `steamapps`.
-    fn write_builtin_appmanifest(steamapps: &std::path::Path, name: &str, install_dir: &str,
-                                 appid: u32) {
+    fn write_builtin_appmanifest(
+        steamapps: &std::path::Path,
+        name: &str,
+        install_dir: &str,
+        appid: u32,
+    ) {
         std::fs::create_dir_all(steamapps).unwrap();
         std::fs::write(
             steamapps.join(format!("appmanifest_{appid}.acf")),
@@ -268,15 +268,21 @@ mod tests {
 
     #[test]
     fn resolves_builtin_experimental() {
-        let root = std::env::temp_dir()
-            .join(format!("protonctx_test_tool_builtin_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "protonctx_test_tool_builtin_{}",
+            std::process::id()
+        ));
         let steamapps = root.join("steamapps");
         let common = steamapps.join("common");
         // Mirrors the real install: display name "Proton Experimental" → install
         // dir "Proton - Experimental" (appid 1493710). Appmanifest lives in
         // `steamapps/`, install dir in `steamapps/common/`.
-        write_builtin_appmanifest(&steamapps, "Proton Experimental", "Proton - Experimental",
-                                 1493710);
+        write_builtin_appmanifest(
+            &steamapps,
+            "Proton Experimental",
+            "Proton - Experimental",
+            1493710,
+        );
         let pe = mk_common(&root, "Proton - Experimental");
 
         let resolved = proton_dir_for_tool(&root, "proton_experimental");
@@ -287,12 +293,18 @@ mod tests {
 
     #[test]
     fn builtin_ignores_linux_runtime() {
-        let root = std::env::temp_dir()
-            .join(format!("protonctx_test_tool_runtime_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "protonctx_test_tool_runtime_{}",
+            std::process::id()
+        ));
         let steamapps = root.join("steamapps");
         // A runtime's manifest name starts with "Steam Linux Runtime", not "Proton".
-        write_builtin_appmanifest(&steamapps, "Steam Linux Runtime 4.0", "SteamLinuxRuntime_4",
-                                 4183110);
+        write_builtin_appmanifest(
+            &steamapps,
+            "Steam Linux Runtime 4.0",
+            "SteamLinuxRuntime_4",
+            4183110,
+        );
         mk_common(&root, "SteamLinuxRuntime_4");
 
         // Runtimes must never be resolved as Proton tools.
@@ -304,8 +316,10 @@ mod tests {
 
     #[test]
     fn none_when_tool_missing() {
-        let root =
-            std::env::temp_dir().join(format!("protonctx_test_tool_missing_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "protonctx_test_tool_missing_{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).ok();
 
         assert_eq!(proton_dir_for_tool(&root, "GE-Proton10-34"), None);

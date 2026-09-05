@@ -1,10 +1,10 @@
 #include <QtCore/QItemSelectionModel>
 #include <QtCore/QPointer>
 #include <QtGui/QAction>
-#include <QtGui/QIcon>
-#include <QtWidgets/QAbstractItemView>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QIcon>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
@@ -138,9 +138,8 @@ void setup_context_menu(QTableView *table_view, AppBackend *backend,
         table_view->setCurrentIndex(index);
 
         QMenu menu(table_view);
-        menu.addAction(QStringLiteral("Browse for executable..."), [browse_button] {
-          browse_button->click();
-        });
+        menu.addAction(QStringLiteral("Browse for executable..."),
+                       [browse_button] { browse_button->click(); });
         menu.addSeparator();
         for (const auto &tool : k_tool_buttons) {
           const QString tool_id = QString::fromLatin1(tool.tool_id);
@@ -148,20 +147,20 @@ void setup_context_menu(QTableView *table_view, AppBackend *backend,
                          [backend, tool_id] { backend->launch_tool(tool_id); });
         }
         menu.addSeparator();
-        menu.addAction(QStringLiteral("Copy compatdata path"),
-                       [backend, index] {
-                         const QString path = backend->compatDataPath(index.row());
-                         if (!path.isEmpty()) {
-                           QGuiApplication::clipboard()->setText(path);
-                         }
-                       });
-        menu.addAction(QStringLiteral("Copy compatibility tool path"),
-                       [backend, index] {
-                         const QString path = backend->protonDirPath(index.row());
-                         if (!path.isEmpty()) {
-                           QGuiApplication::clipboard()->setText(path);
-                         }
-                       });
+        menu.addAction(
+            QStringLiteral("Copy compatdata path"), [backend, index] {
+              const QString path = backend->compatDataPath(index.row());
+              if (!path.isEmpty()) {
+                QGuiApplication::clipboard()->setText(path);
+              }
+            });
+        menu.addAction(
+            QStringLiteral("Copy compatibility tool path"), [backend, index] {
+              const QString path = backend->protonDirPath(index.row());
+              if (!path.isEmpty()) {
+                QGuiApplication::clipboard()->setText(path);
+              }
+            });
         menu.exec(table_view->viewport()->mapToGlobal(pos));
       });
 }
