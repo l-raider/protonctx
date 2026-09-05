@@ -134,7 +134,7 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
             // selected tool cannot be located (e.g. a non-Proton layer like Boxtron).
             let proton_dir = crate::steam::compat::proton_dir_for_tool(&steam_root, &compat_tool)
                 .or_else(|| {
-                    compatdata::proton_dir_for(library, app.app_id).unwrap_or_else(|e| {
+                    compatdata::proton_dir_for(&steam_root, app.app_id).unwrap_or_else(|e| {
                         // A bad `compatdata/<id>/config_info` (e.g. permission denied)
                         // must not abort the whole discovery — just leave the prefix
                         // unresolved for this one game, like a manifest error does.

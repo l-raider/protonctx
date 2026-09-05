@@ -18,7 +18,11 @@ use super::LaunchError;
 pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
     let proton = game.proton_script().ok_or(LaunchError::NoProtonDir)?;
 
-    let compat_data = std::path::Path::new(&game.library_path)
+    let root = steam_root(game);
+    // Proton prefixes (compatdata) always live under the Steam *root*, even for
+    // games installed on a secondary library, so the prefix path must be derived
+    // from the root rather than `game.library_path`.
+    let compat_data = root
         .join("steamapps")
         .join("compatdata")
         .join(game.app_id.to_string());
@@ -28,10 +32,7 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
     cmd.args(args);
 
     cmd.env("STEAM_COMPAT_DATA_PATH", &compat_data);
-    cmd.env(
-        "STEAM_COMPAT_CLIENT_INSTALL_PATH",
-        steam_client_install_path(game),
-    );
+    cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &root);
     cmd.env("SteamGameId", game.app_id.to_string());
     cmd.env("SteamAppId", game.app_id.to_string());
 
@@ -44,7 +45,7 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
     }
 }
 
-/// The `STEAM_COMPAT_CLIENT_INSTALL_PATH` points at the Steam installation root.
+/// Resolve the Steam installation root for a game.
 ///
 /// The game's `library_path` may be a secondary library (e.g. on another disk), so we
 /// cannot assume it equals the Steam root. The robust approach is to derive the root from
@@ -52,9 +53,12 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
 /// and custom tools at `<steam_root>/compatibilitytools.d/<name>/proton` — both share the
 /// same `<steam_root>/steamapps` or `<steam_root>/compatibilitytools.d` ancestor.
 ///
+/// The root is used both for `STEAM_COMPAT_CLIENT_INSTALL_PATH` and to locate
+/// `steamapps/compatdata/<appid>` (see [`run_in_prefix`]).
+///
 /// As a pragmatic fallback (when derivation fails), the environment's `HOME`-based default
-/// `~/.local/share/Steam` is used.
-fn steam_client_install_path(game: &Game) -> std::path::PathBuf {
+/// `~/.local/share/Steam` is used, then finally `game.library_path`.
+fn steam_root(game: &Game) -> std::path::PathBuf {
     if let Some(root) = steam_root_from_proton_dir(&game.proton_dir) {
         return root;
     }

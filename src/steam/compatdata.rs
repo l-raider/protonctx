@@ -28,8 +28,11 @@ const DEFAULT_PFX_SUFFIX: &str = "/files/share/default_pfx/";
 
 /// Resolve the Proton directory for the given app's prefix, or `None` if the prefix has not
 /// been created yet (the game has never been run under Proton).
-pub fn proton_dir_for(library: &Path, app_id: u32) -> Result<Option<PathBuf>, SteamError> {
-    let Some(lines) = read_lines(library, app_id)? else {
+///
+/// `steam_root` is the Steam installation root: `config_info` lives under the root's
+/// `steamapps/compatdata/<appid>/`, never under a secondary library.
+pub fn proton_dir_for(steam_root: &Path, app_id: u32) -> Result<Option<PathBuf>, SteamError> {
+    let Some(lines) = read_lines(steam_root, app_id)? else {
         return Ok(None);
     };
 
@@ -51,8 +54,8 @@ pub fn proton_dir_for(library: &Path, app_id: u32) -> Result<Option<PathBuf>, St
 /// A missing file returns `Ok(None)` (the prefix simply hasn't been created yet),
 /// while a genuine I/O failure (e.g. permission denied) is propagated as an error
 /// rather than silently swallowed.
-fn read_lines(library: &Path, app_id: u32) -> Result<Option<Vec<String>>, SteamError> {
-    let config_info = library
+fn read_lines(steam_root: &Path, app_id: u32) -> Result<Option<Vec<String>>, SteamError> {
+    let config_info = steam_root
         .join("steamapps")
         .join("compatdata")
         .join(app_id.to_string())
