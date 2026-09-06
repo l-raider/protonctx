@@ -16,8 +16,10 @@ void show_settings_dialog(QWidget *parent, AppBackend *backend) {
       new QCheckBox(QStringLiteral("Remember last used directory"), &dialog);
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
 
-  // Initialize from the persisted preference and persist every toggle
-  // immediately (see AppBackend::set_remember_last_dir).
+  // Initialize from the persisted preference first, then connect the signal:
+  // setChecked() emits `toggled`, which would otherwise trigger an immediate
+  // (redundant) config write — and write `false` if the stored value differed —
+  // before the user has even interacted with the dialog.
   remember_box->setChecked(backend->getRemember_last_dir());
   QObject::connect(
       remember_box, &QCheckBox::toggled, &dialog,

@@ -117,7 +117,10 @@ pub fn load_last_dir() -> Option<PathBuf> {
     let path = state_path()?;
     let text = std::fs::read_to_string(path).ok()?;
     let state: AppState = serde_json::from_str(&text).ok()?;
-    state.last_dir.filter(|s| !s.is_empty()).map(PathBuf::from)
+    state
+        .last_dir
+        .filter(|s| !s.is_empty())
+        .map(|s| decode_dir(&s))
 }
 
 /// Persist the remembered last directory. Best-effort; an `Err` carries a reason.
@@ -126,10 +129,70 @@ pub fn save_last_dir(dir: &Path) -> Result<(), String> {
         return Err("could not resolve state directory".to_string());
     };
     let state = AppState {
-        last_dir: Some(dir.to_string_lossy().into_owned()),
+        last_dir: Some(encode_dir(dir)),
     };
     let text = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
     write_atomic(&path, &text).map_err(|e| format!("write state: {e}"))
+}
+
+/// Encode a directory path for storage in `state.json` without loss.
+///
+/// Paths that are valid UTF-8 are stored verbatim (so existing state files remain
+/// readable); otherwise the raw OS bytes are hex-encoded with a `hex:` prefix so a
+/// non-UTF-8 path (e.g. a directory containing invalid UTF-8 bytes) round-trips
+/// exactly, rather than being mangled by `to_string_lossy()`.
+fn encode_dir(dir: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = dir.as_os_str().as_bytes();
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => format!("hex:{}", hex_encode(bytes)),
+    }
+}
+
+/// Reverse of [`encode_dir`]: a `hex:`-prefixed value is hex-decoded back to the
+/// original bytes; anything else is treated as a plain UTF-8 path.
+fn decode_dir(s: &str) -> PathBuf {
+    if let Some(bytes) = s.strip_prefix("hex:").and_then(hex_decode) {
+        use std::os::unix::ffi::OsStringExt;
+        return PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    }
+    PathBuf::from(s)
+}
+
+/// Hex-encode `bytes` to lowercase ASCII.
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for &b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Hex-decode an even-length ASCII hex string, or `None` on malformed input.
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.as_chunks::<2>().0 {
+        let hi = hex_val(pair[0])?;
+        let lo = hex_val(pair[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Write `contents` to `path` atomically: write to a temporary sibling file and
@@ -185,5 +248,32 @@ mod tests {
         assert_eq!(text, r#"{"remember_last_dir":false}"#);
         let back: AppConfig = serde_json::from_str(&text).unwrap();
         assert!(!back.remember_last_dir);
+    }
+
+    #[test]
+    fn utf8_dir_is_stored_verbatim() {
+        let dir = PathBuf::from("/home/user/.local/share/Steam");
+        let encoded = encode_dir(&dir);
+        assert_eq!(encoded, "/home/user/.local/share/Steam");
+        assert_eq!(decode_dir(&encoded), dir);
+    }
+
+    #[test]
+    fn non_utf8_dir_roundtrips_losslessly() {
+        use std::os::unix::ffi::OsStringExt;
+        // A path containing invalid UTF-8 bytes (0xFF) must round-trip exactly.
+        let raw = b"/home/user/\xFFdir";
+        let dir = PathBuf::from(std::ffi::OsString::from_vec(raw.to_vec()));
+
+        let encoded = encode_dir(&dir);
+        assert!(encoded.starts_with("hex:"));
+        let decoded = decode_dir(&encoded);
+        assert_eq!(decoded, dir);
+    }
+
+    #[test]
+    fn hex_decode_rejects_odd_length() {
+        assert!(hex_decode("abc").is_none());
+        assert_eq!(hex_decode("0a0b").unwrap(), vec![0x0a, 0x0b]);
     }
 }
