@@ -15,6 +15,7 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QMessageBox>
+#include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTableView>
@@ -220,8 +221,7 @@ void wire_signals(QMainWindow *window, QWidget *central_widget,
   // so the user can always resize it manually.
   auto did_initial_fit = std::make_shared<bool>(false);
   QObject::connect(backend, &QAbstractItemModel::modelReset, central_widget,
-                   [table_view, backend, sync_action_state,
-                    did_initial_fit]() {
+                   [table_view, backend, sync_action_state, did_initial_fit]() {
                      if (!*did_initial_fit) {
                        table_view->resizeColumnToContents(0);
                        *did_initial_fit = true;
@@ -343,8 +343,24 @@ void qt_show_main_window() {
   main_layout->addWidget(table_view, 1);
   main_layout->addLayout(actions_layout);
 
-  window->statusBar()->addWidget(status_label, 1);
+  // Indeterminate progress bar shown while a launch is running. A QProgressBar
+  // with range (0,0) animates a "busy" indicator whenever it is visible, so
+  // toggling visibility on launch_running is all that is needed. Added as a
+  // normal (left-aligned) widget right after the status label, so it sits on
+  // the left of the status bar, following the status text.
+  auto *progress_bar = new QProgressBar();
+  progress_bar->setRange(0, 0);
+  progress_bar->setTextVisible(false);
+  progress_bar->setMaximumWidth(100);
+  progress_bar->hide();
+  window->statusBar()->addWidget(status_label);
+  window->statusBar()->addWidget(progress_bar);
   window->statusBar()->addPermanentWidget(selection_label);
+
+  QObject::connect(backend, &AppBackend::launch_runningChanged, progress_bar,
+                   [progress_bar, backend]() {
+                     progress_bar->setVisible(backend->getLaunch_running());
+                   });
 
   // Enable the launch buttons only when a game is selected.
   const auto sync_action_state = [backend, browse_button, tool_buttons]() {

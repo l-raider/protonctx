@@ -43,6 +43,11 @@ impl std::error::Error for LaunchError {
 }
 
 /// Launch a built-in Wine tool (e.g. `winecfg`) in the game's prefix.
-pub fn launch_tool(game: &Game, tool: &str) -> Result<(), LaunchError> {
+///
+/// Returns the spawned [`std::process::Child`] so the caller can track its
+/// lifetime. Because `proton runinprefix` blocks until the target executable
+/// exits (it calls `subprocess.call`), waiting on this child is equivalent to
+/// waiting for the launched tool to finish.
+pub fn launch_tool(game: &Game, tool: &str) -> Result<std::process::Child, LaunchError> {
     proton::run_in_prefix(game, &[tool])
 }

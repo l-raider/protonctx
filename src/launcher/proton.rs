@@ -15,7 +15,12 @@ use super::LaunchError;
 ///
 /// `args` are the positional arguments passed after the `runinprefix` verb. This spawns
 /// the process in the background (non-blocking), matching how a GUI launcher should behave.
-pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
+///
+/// Returns the spawned [`std::process::Child`] so the caller can observe when the process
+/// finishes. Note that `proton runinprefix` itself blocks until the target executable exits
+/// (it invokes `subprocess.call`), so waiting on the returned child tracks the lifetime of
+/// the launched executable, not just the wrapper script.
+pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<std::process::Child, LaunchError> {
     let proton = game.proton_script().ok_or(LaunchError::NoProtonDir)?;
 
     let root = steam_root(game);
@@ -37,7 +42,7 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<(), LaunchError> {
     cmd.env("SteamAppId", game.app_id.to_string());
 
     match cmd.spawn() {
-        Ok(_) => Ok(()),
+        Ok(child) => Ok(child),
         Err(source) => Err(LaunchError::Spawn {
             path: proton,
             source,

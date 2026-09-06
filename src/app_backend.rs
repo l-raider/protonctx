@@ -68,6 +68,7 @@ pub mod qobject {
         #[qproperty(QString, status_text)]
         #[qproperty(QString, app_version)]
         #[qproperty(bool, remember_last_dir)]
+        #[qproperty(bool, launch_running)]
         type AppBackend = super::AppBackendRust;
 
         // QAbstractTableModel overrides.
@@ -150,6 +151,11 @@ pub struct AppBackendRust {
     app_version: QString,
     /// Whether the "Browse…" file picker remembers (and reopens at) the last directory.
     remember_last_dir: bool,
+    /// Whether a launch is currently in flight (drives the status-bar progress indicator).
+    launch_running: bool,
+    /// Monotonic launch-generation counter used to discard stale watcher results when
+    /// multiple launches overlap.
+    launch_generation: u64,
     /// Cached `roleNames()` map — roles never change, so build it once.
     role_names: QHash<QHashPair_i32_QByteArray>,
     /// Monotonic load-generation counter used to discard stale async results.
@@ -167,6 +173,8 @@ impl Default for AppBackendRust {
             status_text: QString::from("Ready"),
             app_version: QString::from(env!("CARGO_PKG_VERSION")),
             remember_last_dir: config.remember_last_dir,
+            launch_running: false,
+            launch_generation: 0,
             role_names,
             load_generation: 0,
         }
@@ -396,9 +404,8 @@ impl qobject::AppBackend {
 
         let tool = arg.to_string();
         match launcher::launch_tool(game, &tool) {
-            Ok(()) => {
-                self.as_mut()
-                    .set_status_text(QString::from(&format!("Launching {tool}...")));
+            Ok(child) => {
+                self.start_launch_watcher(child, format!("Running {tool}..."));
             }
             Err(e) => {
                 let msg = QString::from(&format!("Failed to launch {tool}: {e}"));
@@ -416,15 +423,58 @@ impl qobject::AppBackend {
 
         let path = path.to_string();
         match launcher::proton::run_in_prefix(game, &[&path]) {
-            Ok(()) => {
-                self.as_mut()
-                    .set_status_text(QString::from(&format!("Launching {path}...")));
+            Ok(child) => {
+                self.start_launch_watcher(child, format!("Running {path}..."));
             }
             Err(e) => {
                 let msg = QString::from(&format!("Failed to launch: {e}"));
                 self.as_mut().launch_failed(&msg);
             }
         }
+    }
+
+    /// Record that a launch is now running and spawn a background thread that waits for
+    /// the child process to exit, then clears the running state on the Qt thread.
+    ///
+    /// The [`std::process::Child`] is moved into the watcher thread (it is not `Sync`, so it
+    /// cannot live in the qobject struct). A monotonic generation counter ensures a stale
+    /// watcher (from an earlier, still-running launch) cannot clear the running state that a
+    /// newer launch has set.
+    fn start_launch_watcher(
+        mut self: Pin<&mut Self>,
+        mut child: std::process::Child,
+        status: String,
+    ) {
+        // Bump the generation so any previously-spawned watcher becomes stale.
+        let generation = {
+            let mut state = self.as_mut().rust_mut();
+            state.launch_generation = state.launch_generation.wrapping_add(1);
+            state.launch_generation
+        };
+
+        self.as_mut().set_launch_running(true);
+        self.as_mut().set_status_text(QString::from(&status));
+
+        let qt_thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = child.wait();
+            let _ = qt_thread.queue(move |mut app| {
+                // A newer launch superseded this one; do not clobber its state.
+                if generation != app.as_ref().rust().launch_generation {
+                    return;
+                }
+                let finished = match result {
+                    Ok(status) => match status.code() {
+                        Some(0) => "Finished".to_string(),
+                        Some(code) => format!("Exited with code {code}"),
+                        None => "Finished (terminated by signal)".to_string(),
+                    },
+                    Err(e) => format!("Launch error: {e}"),
+                };
+                app.as_mut().set_launch_running(false);
+                app.as_mut().set_status_text(QString::from(&finished));
+            });
+        });
     }
 
     /// The remembered last directory (from `state.json`), or an empty string when
