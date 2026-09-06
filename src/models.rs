@@ -16,10 +16,10 @@ pub struct Game {
     /// and falls back to the default. Shown verbatim in the UI.
     pub compat_tool: String,
     /// Absolute path to the Steam library this game is installed in, e.g.
-    /// `"/home/lraider/.local/share/Steam"`.
+    /// `"/home/username/.local/share/Steam"`.
     pub library_path: String,
     /// Absolute path to the Proton compatibility tool directory that this game runs with,
-    /// e.g. `"/home/lraider/.local/share/Steam/steamapps/common/Proton - Experimental"`.
+    /// e.g. `"/home/username/.local/share/Steam/steamapps/common/Proton - Experimental"`.
     /// Empty when it could not be resolved.
     ///
     /// Prefer resolving this *from the currently-selected `compat_tool`* (see
