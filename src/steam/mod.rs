@@ -67,7 +67,11 @@ fn is_compat_tool(install_dir: &std::path::Path) -> bool {
 /// The Steam root is returned *as* the library (not `<root>/steamapps`), because
 /// `installed_apps()` appends `steamapps` to each library entry.
 fn default_library_fallback(steam_root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    if steam_root.join("steamapps").join("libraryfolders.vdf").is_file() {
+    if steam_root
+        .join("steamapps")
+        .join("libraryfolders.vdf")
+        .is_file()
+    {
         vec![steam_root.to_path_buf()]
     } else {
         Vec::new()
@@ -185,7 +189,8 @@ mod tests {
 
     #[test]
     fn fallback_uses_steam_root_as_library() {
-        let root = std::env::temp_dir().join(format!("protonctx_test_fallback_{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("protonctx_test_fallback_{}", std::process::id()));
         std::fs::create_dir_all(root.join("steamapps")).unwrap();
         std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
 
@@ -197,7 +202,10 @@ mod tests {
 
     #[test]
     fn fallback_empty_when_no_steamapps_vdf() {
-        let root = std::env::temp_dir().join(format!("protonctx_test_fallback_empty_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "protonctx_test_fallback_empty_{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         assert!(default_library_fallback(&root).is_empty());
@@ -210,7 +218,10 @@ mod tests {
     // `<root>/steamapps/steamapps/...`.
     #[test]
     fn fallback_library_has_no_nested_steamapps() {
-        let root = std::env::temp_dir().join(format!("protonctx_test_fallback_nested_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "protonctx_test_fallback_nested_{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(root.join("steamapps")).unwrap();
         std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
 
