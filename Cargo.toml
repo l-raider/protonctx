@@ -1,10 +1,10 @@
 [package]
 name = "protonctx"
-version = "0.2.1"
+version = "1.0.0"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "Launch executables inside a Steam game's Proton context"
-repository = "local"
+repository = "https://github.com/l-raider/protonctx"
 
 # Opt into the workspace lints (clippy denies below).
 [lints]
@@ -24,10 +24,10 @@ cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
 # Must match [dependencies] cxx pin.
 cxx = "1.0"
 
-# [profile.release]
-# lto = true
-# strip = true
-# codegen-units = 1
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
 
 [workspace.lints.clippy]
 dbg_macro = "deny"
