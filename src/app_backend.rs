@@ -256,6 +256,16 @@ impl qobject::AppBackend {
         // thread rather than blocking the GUI thread before the event loop runs.
         // Results are delivered back onto the Qt event loop via `CxxQtThread`;
         // the model must only be mutated on the GUI thread.
+        //
+        // NOTE (lifetime/shutdown): the worker thread is detached. This is safe:
+        // `discover_games()` is pure (no references to the qobject or GUI), and
+        // the closure only captures `qt_thread` (a `CxxQtThread`, which is
+        // `'static`/owned) plus the `generation` integer. On shutdown, returning
+        // from `main()` terminates the detached thread; if it has already queued
+        // a result, that closure is simply never run because the Qt event loop
+        // (`qt_app_exec`) has returned and `queue` is dropped. There is no
+        // use-after-free: the qobject lives on the GUI thread, and all mutation
+        // is marshalled back to that thread via `queue`.
         self.as_mut()
             .set_status_text(QString::from("Loading games..."));
 
@@ -461,6 +471,12 @@ impl qobject::AppBackend {
         self.as_mut().set_status_text(QString::from(&status));
 
         let qt_thread = self.qt_thread();
+        // NOTE (lifetime/shutdown): the watcher thread is detached and owns the
+        // `Child` (which is not `Sync`, so it cannot live in the qobject struct).
+        // This is safe: it only calls `child.wait()` (blocking on the child) and
+        // then `qt_thread.queue` to marshal the result back to the GUI thread.
+        // On shutdown, returning from `main()` terminates the thread; a queued
+        // result is simply never delivered once the event loop has returned.
         std::thread::spawn(move || {
             let result = child.wait();
             let _ = qt_thread.queue(move |mut app| {
