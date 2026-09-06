@@ -125,16 +125,20 @@ void setup_context_menu(QTableView *table_view, AppBackend *backend,
         }
         menu.addSeparator();
         menu.addAction(
-            QStringLiteral("Copy compatdata path"), &menu, [backend, index] {
-              const QString path = backend->compatDataPath(index.row());
+            QStringLiteral("Copy compatdata path"), &menu, [backend] {
+              // Re-resolve the selected row at action time rather than
+              // capturing the right-clicked index: an async model reset
+              // (load/sort) can invalidate the index while the menu is open.
+              const int row = backend->getSelected_row();
+              const QString path = backend->compatDataPath(row);
               if (!path.isEmpty()) {
                 QGuiApplication::clipboard()->setText(path);
               }
             });
         menu.addAction(QStringLiteral("Copy compatibility tool path"), &menu,
-                       [backend, index] {
-                         const QString path =
-                             backend->protonDirPath(index.row());
+                       [backend] {
+                         const int row = backend->getSelected_row();
+                         const QString path = backend->protonDirPath(row);
                          if (!path.isEmpty()) {
                            QGuiApplication::clipboard()->setText(path);
                          }
