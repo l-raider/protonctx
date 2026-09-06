@@ -60,6 +60,20 @@ fn is_compat_tool(install_dir: &std::path::Path) -> bool {
         || install_dir.join("compatibilitytool.vdf").is_file()
 }
 
+/// The fallback library list used when `libraryfolders.vdf` is missing or yields no
+/// valid folders: the Steam root itself (the default library), provided its
+/// `steamapps/libraryfolders.vdf` exists. Returns an empty list otherwise.
+///
+/// The Steam root is returned *as* the library (not `<root>/steamapps`), because
+/// `installed_apps()` appends `steamapps` to each library entry.
+fn default_library_fallback(steam_root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    if steam_root.join("steamapps").join("libraryfolders.vdf").is_file() {
+        vec![steam_root.to_path_buf()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Discover the installed Steam games across all library folders.
 ///
 /// Returns `Err(SteamError::SteamNotFound)` when Steam cannot be located, so the
@@ -69,15 +83,10 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
 
     let libraries = match libraryfolders::library_folders(&steam_root) {
         Ok(libs) if !libs.is_empty() => libs,
-        // Fall back to the default library under the Steam root.
-        _ => {
-            let default = steam_root.join("steamapps");
-            if default.join("libraryfolders.vdf").is_file() {
-                vec![default]
-            } else {
-                Vec::new()
-            }
-        }
+        // Fall back to the default library. A "library" is the directory that
+        // *contains* `steamapps/`, so the Steam root itself is the default
+        // library (installed_apps() appends `steamapps` to each entry).
+        _ => default_library_fallback(&steam_root),
     };
 
     let compat_tools = match compat::compat_tool_map(&steam_root) {
@@ -167,4 +176,48 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
     });
 
     Ok(games)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn fallback_uses_steam_root_as_library() {
+        let root = std::env::temp_dir().join(format!("protonctx_test_fallback_{}", std::process::id()));
+        std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
+
+        let libs = default_library_fallback(&root);
+        assert_eq!(libs, vec![root.clone()]);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn fallback_empty_when_no_steamapps_vdf() {
+        let root = std::env::temp_dir().join(format!("protonctx_test_fallback_empty_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert!(default_library_fallback(&root).is_empty());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // The returned library path must not itself contain a trailing `steamapps`,
+    // otherwise installed_apps() would append another `steamapps` and look in
+    // `<root>/steamapps/steamapps/...`.
+    #[test]
+    fn fallback_library_has_no_nested_steamapps() {
+        let root = std::env::temp_dir().join(format!("protonctx_test_fallback_nested_{}", std::process::id()));
+        std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
+
+        let libs = default_library_fallback(&root);
+        let lib: &PathBuf = &libs[0];
+        assert!(!lib.ends_with("steamapps"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
