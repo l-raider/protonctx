@@ -24,10 +24,9 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<std::process::Child, 
     let proton = game.proton_script().ok_or(LaunchError::NoProtonDir)?;
 
     let root = steam_root_for(game);
-    // Proton prefixes (compatdata) always live under the Steam *root*, even for
-    // games installed on a secondary library, so the prefix path must be derived
-    // from the root rather than `game.library_path`.
-    let compat_data = compat_data_dir_for(&root, game.app_id);
+    // Proton prefixes (compatdata) live under the library the game is installed in,
+    // NOT the Steam root: a game on a secondary library keeps its prefix there.
+    let compat_data = compat_data_dir_for(std::path::Path::new(&game.library_path), game.app_id);
 
     let mut cmd = Command::new(&proton);
     cmd.arg("runinprefix");
@@ -79,12 +78,13 @@ pub fn steam_root_for(game: &Game) -> std::path::PathBuf {
     std::path::PathBuf::from(&game.library_path)
 }
 
-/// The compatdata (prefix) directory for an app, under the given Steam root.
+/// The compatdata (prefix) directory for an app, under the library it is installed in.
 ///
-/// Proton prefixes always live under the Steam *root*'s `steamapps/compatdata/`,
-/// regardless of whether the game is installed on a secondary library.
-pub fn compat_data_dir_for(steam_root: &std::path::Path, app_id: u32) -> std::path::PathBuf {
-    steam_root
+/// Proton prefixes live under the *library*'s `steamapps/compatdata/` (Steam creates the
+/// prefix next to the game install, so a game on a secondary library keeps its prefix
+/// there, not under the Steam root).
+pub fn compat_data_dir_for(library: &std::path::Path, app_id: u32) -> std::path::PathBuf {
+    library
         .join("steamapps")
         .join("compatdata")
         .join(app_id.to_string())

@@ -58,10 +58,9 @@ cargo run
 - **Proton directory**: resolved authoritatively from `compatdata/<appid>/config_info`
   (works for both built-in tools under `steamapps/common` and custom tools under
   `compatibilitytools.d`, e.g. GE-Proton).
-- **Compatdata (prefix) location**: Steam stores Proton prefixes under the installation
-  root's `steamapps/compatdata/<appid>`, not under a secondary library. The launcher
-  resolves the Steam root from the Proton directory and points `STEAM_COMPAT_DATA_PATH`
-  there, so games installed on a secondary library still launch against the correct prefix.
+- **Compatdata (prefix) location**: Steam stores a Proton prefix under the *library* the
+  game is installed in, i.e. `<library>/steamapps/compatdata/<appid>`. The launcher points
+  `STEAM_COMPAT_DATA_PATH` at the game's library, so a game installed on a secondary library still launches against the correct prefix.
 - **Launching**: invokes `<proton_dir>/proton runinprefix <arg>` with the Steam compat
   environment (`STEAM_COMPAT_DATA_PATH`, `STEAM_COMPAT_CLIENT_INSTALL_PATH`, `SteamGameId`).
 
