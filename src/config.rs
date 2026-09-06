@@ -108,11 +108,8 @@ pub fn save_config(config: &AppConfig) -> Result<(), String> {
     let Some(path) = config_path() else {
         return Err("could not resolve config directory".to_string());
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create config dir: {e}"))?;
-    }
     let text = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| format!("write config: {e}"))
+    write_atomic(&path, &text).map_err(|e| format!("write config: {e}"))
 }
 
 /// Load the remembered last directory, or `None` if unset/unreadable.
@@ -128,14 +125,39 @@ pub fn save_last_dir(dir: &Path) -> Result<(), String> {
     let Some(path) = state_path() else {
         return Err("could not resolve state directory".to_string());
     };
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create state dir: {e}"))?;
-    }
     let state = AppState {
         last_dir: Some(dir.to_string_lossy().into_owned()),
     };
     let text = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
-    std::fs::write(&path, text).map_err(|e| format!("write state: {e}"))
+    write_atomic(&path, &text).map_err(|e| format!("write state: {e}"))
+}
+
+/// Write `contents` to `path` atomically: write to a temporary sibling file and
+/// `rename` it into place. This avoids leaving a truncated/corrupt file behind if
+/// the process is killed (or the write fails) partway through, so a later load
+/// never sees a half-written JSON document.
+fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Unique temp name: same directory (so rename stays on one filesystem) with a
+    // process + thread id to avoid collisions between concurrent writers.
+    let tmp = path.with_extension(format!(
+        "tmp.{}.{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::write(&tmp, contents)?;
+    // Atomically replace the target; `rename` is atomic on POSIX when src and dst
+    // share a filesystem (guaranteed here since the temp file is a sibling).
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // Best-effort cleanup of the temp file on failure.
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
