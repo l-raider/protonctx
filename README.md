@@ -1,4 +1,5 @@
 # protonctx
+Disclaimer: This project was made with LLM assistance.
 
 Helper GUI tool to launch executables inside a Steam game's Proton context.
 
