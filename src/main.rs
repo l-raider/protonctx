@@ -27,5 +27,14 @@ fn main() -> std::process::ExitCode {
     // Populate the games table after the window exists (model attached in C++).
     unsafe { qt_load_games() };
 
-    std::process::ExitCode::from(unsafe { qt_app_exec() } as u8)
+    // qt_app_exec() returns the QApplication exit code (i32) or 1 on init
+    // failure. Map it to a clean 0/1 exit status: a nonzero Qt exit code is an
+    // error, but its exact value is not meaningful to a shell, and truncating
+    // to u8 would silently wrap negative or >255 codes.
+    let code = unsafe { qt_app_exec() };
+    if code == 0 {
+        std::process::ExitCode::SUCCESS
+    } else {
+        std::process::ExitCode::FAILURE
+    }
 }
