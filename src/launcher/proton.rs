@@ -23,14 +23,11 @@ use super::LaunchError;
 pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<std::process::Child, LaunchError> {
     let proton = game.proton_script().ok_or(LaunchError::NoProtonDir)?;
 
-    let root = steam_root(game);
+    let root = steam_root_for(game);
     // Proton prefixes (compatdata) always live under the Steam *root*, even for
     // games installed on a secondary library, so the prefix path must be derived
     // from the root rather than `game.library_path`.
-    let compat_data = root
-        .join("steamapps")
-        .join("compatdata")
-        .join(game.app_id.to_string());
+    let compat_data = compat_data_dir_for(&root, game.app_id);
 
     let mut cmd = Command::new(&proton);
     cmd.arg("runinprefix");
@@ -63,7 +60,11 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<std::process::Child, 
 ///
 /// As a pragmatic fallback (when derivation fails), the environment's `HOME`-based default
 /// `~/.local/share/Steam` is used, then finally `game.library_path`.
-fn steam_root(game: &Game) -> std::path::PathBuf {
+///
+/// This is the single source of truth for Steam-root resolution, shared with
+/// `AppBackend::compat_data_path()` so the "Copy compatdata path" UI always matches the
+/// path a launch actually uses.
+pub fn steam_root_for(game: &Game) -> std::path::PathBuf {
     if let Some(root) = steam_root_from_proton_dir(&game.proton_dir) {
         return root;
     }
@@ -76,6 +77,17 @@ fn steam_root(game: &Game) -> std::path::PathBuf {
     }
 
     std::path::PathBuf::from(&game.library_path)
+}
+
+/// The compatdata (prefix) directory for an app, under the given Steam root.
+///
+/// Proton prefixes always live under the Steam *root*'s `steamapps/compatdata/`,
+/// regardless of whether the game is installed on a secondary library.
+pub fn compat_data_dir_for(steam_root: &std::path::Path, app_id: u32) -> std::path::PathBuf {
+    steam_root
+        .join("steamapps")
+        .join("compatdata")
+        .join(app_id.to_string())
 }
 
 /// Derive the Steam root from a Proton directory path.

@@ -331,19 +331,16 @@ impl qobject::AppBackend {
     /// The absolute path of the game's compatibility (prefix) directory, i.e.
     /// `<steam_root>/steamapps/compatdata/<app_id>`, or an empty string if the row is
     /// out of range. `compatdata` always lives under the Steam *root* (never a secondary
-    /// library), so we prefer `find_steam_root()` and only fall back to the game's own
-    /// `library_path` when that lookup fails.
+    /// library). Resolved via the same shared helper the launcher uses
+    /// ([`launcher::proton::steam_root_for`] / [`launcher::proton::compat_data_dir_for`]),
+    /// so the copied path always matches the prefix a launch actually uses.
     fn compat_data_path(&self, row: i32) -> QString {
         let Some(game) = self.rust().games.get(row as usize) else {
             return QString::default();
         };
 
-        let root = crate::steam::locations::find_steam_root()
-            .unwrap_or_else(|| std::path::PathBuf::from(&game.library_path));
-        let path = root
-            .join("steamapps")
-            .join("compatdata")
-            .join(game.app_id.to_string());
+        let root = crate::launcher::proton::steam_root_for(game);
+        let path = crate::launcher::proton::compat_data_dir_for(&root, game.app_id);
 
         QString::from(&path.to_string_lossy().into_owned())
     }
