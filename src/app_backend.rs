@@ -153,6 +153,10 @@ pub struct AppBackendRust {
     remember_last_dir: bool,
     /// Whether a launch is currently in flight (drives the status-bar progress indicator).
     launch_running: bool,
+    /// Number of launched-but-not-yet-exited child processes. Kept separate from
+    /// `launch_running` so that overlapping launches clear the progress indicator only
+    /// after the *last* one finishes.
+    active_launches: usize,
     /// Monotonic launch-generation counter used to discard stale watcher results when
     /// multiple launches overlap.
     launch_generation: u64,
@@ -174,6 +178,7 @@ impl Default for AppBackendRust {
             app_version: QString::from(env!("CARGO_PKG_VERSION")),
             remember_last_dir: config.remember_last_dir,
             launch_running: false,
+            active_launches: 0,
             launch_generation: 0,
             role_names,
             load_generation: 0,
@@ -435,17 +440,20 @@ impl qobject::AppBackend {
     ///
     /// The [`std::process::Child`] is moved into the watcher thread (it is not `Sync`, so it
     /// cannot live in the qobject struct). A monotonic generation counter ensures a stale
-    /// watcher (from an earlier, still-running launch) cannot clear the running state that a
-    /// newer launch has set.
+    /// watcher (from an earlier, still-running launch) cannot clobber the status text that a
+    /// newer launch has set, while `active_launches` ensures `launch_running` is cleared only
+    /// after the last overlapping launch finishes.
     fn start_launch_watcher(
         mut self: Pin<&mut Self>,
         mut child: std::process::Child,
         status: String,
     ) {
-        // Bump the generation so any previously-spawned watcher becomes stale.
+        // Bump the generation so any previously-spawned watcher becomes stale for
+        // status-text purposes, and count this launch as active.
         let generation = {
             let mut state = self.as_mut().rust_mut();
             state.launch_generation = state.launch_generation.wrapping_add(1);
+            state.active_launches = state.active_launches.saturating_add(1);
             state.launch_generation
         };
 
@@ -456,20 +464,31 @@ impl qobject::AppBackend {
         std::thread::spawn(move || {
             let result = child.wait();
             let _ = qt_thread.queue(move |mut app| {
-                // A newer launch superseded this one; do not clobber its state.
-                if generation != app.as_ref().rust().launch_generation {
-                    return;
-                }
-                let finished = match result {
-                    Ok(status) => match status.code() {
-                        Some(0) => "Finished".to_string(),
-                        Some(code) => format!("Exited with code {code}"),
-                        None => "Finished (terminated by signal)".to_string(),
-                    },
-                    Err(e) => format!("Launch error: {e}"),
+                let (is_latest, still_running) = {
+                    let mut state = app.as_mut().rust_mut();
+                    state.active_launches = state.active_launches.saturating_sub(1);
+                    // A newer launch superseded this one for *status text*
+                    // purposes; do not clobber its message.
+                    let is_latest = generation == state.launch_generation;
+                    // Clear the running indicator only when no launch is left in
+                    // flight.
+                    let still_running = state.active_launches > 0;
+                    (is_latest, still_running)
                 };
-                app.as_mut().set_launch_running(false);
-                app.as_mut().set_status_text(QString::from(&finished));
+
+                if is_latest {
+                    let finished = match result {
+                        Ok(status) => match status.code() {
+                            Some(0) => "Finished".to_string(),
+                            Some(code) => format!("Exited with code {code}"),
+                            None => "Finished (terminated by signal)".to_string(),
+                        },
+                        Err(e) => format!("Launch error: {e}"),
+                    };
+                    app.as_mut().set_status_text(QString::from(&finished));
+                }
+
+                app.as_mut().set_launch_running(still_running);
             });
         });
     }
