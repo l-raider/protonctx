@@ -1,0 +1,37 @@
+# Build environment for producing protonctx AppImages.
+#
+# Deliberately based on Debian 13 (trixie) so the binary links against the
+# OLDEST glibc the AppImage must support (Debian 13 / Ubuntu 26.04). Building
+# on the Fedora 44 host instead would emit binaries requiring a newer glibc
+# that older distros cannot satisfy. linuxdeploy's excludelist keeps glibc out
+# of the bundle, so the host system's glibc is used at runtime — hence the
+# build container must use the minimum glibc of all targets.
+FROM debian:13
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates build-essential pkg-config cmake \
+    file patchelf git \
+    qt6-base-dev libqt6svg6-dev qt6-tools-dev \
+    qt6-declarative-dev \
+    librsvg2-bin \
+  && rm -rf /var/lib/apt/lists/*
+
+# Rust stable (edition 2024 requires 1.85+; README states 1.87+).
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+  | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# linuxdeploy + Qt bundling plugin.
+RUN curl -fLo /usr/local/bin/linuxdeploy \
+      "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
+  && curl -fLo /usr/local/bin/linuxdeploy-plugin-qt \
+      "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage" \
+  && chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/linuxdeploy-plugin-qt
+
+# linuxdeploy ships as an AppImage and normally needs FUSE2. The build script
+# sets APPIMAGE_EXTRACT_AND_RUN=1 so the tools run without mounting FUSE,
+# therefore no FUSE package is required here.
+
+WORKDIR /src

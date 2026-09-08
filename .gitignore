@@ -18,3 +18,5 @@ target/
 #.idea/
 
 vendor/
+AppDir/
+protonctx-x86_64.AppImage
