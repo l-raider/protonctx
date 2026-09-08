@@ -20,3 +20,4 @@ target/
 vendor/
 AppDir/
 protonctx-x86_64.AppImage
+squashfs-root/

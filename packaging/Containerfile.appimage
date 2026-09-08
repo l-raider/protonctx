@@ -16,6 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qt6-base-dev libqt6svg6-dev qt6-tools-dev \
     qt6-declarative-dev \
     librsvg2-bin \
+    # Native KDE Plasma look: bundles the Breeze widget style
+    # (styles/breeze6.so) and the Plasma platform theme
+    # (platformthemes/KDEPlasmaPlatformTheme6.so). These are KF6 plugins whose
+    # transitive KF6/Qt dependencies linuxdeploy pulls into the AppImage at
+    # build time. This substantially grows the bundle but gives a native
+    # Plasma theme with Fusion as the fallback on non-KDE desktops.
+    kde-style-breeze plasma-integration \
   && rm -rf /var/lib/apt/lists/*
 
 # Rust stable (edition 2024 requires 1.85+; README states 1.87+).
