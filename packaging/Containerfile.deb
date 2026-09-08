@@ -1,0 +1,31 @@
+# Build environment for producing protonctx .deb packages.
+#
+# Deliberately based on Debian 13 (trixie) so the binary links against the
+# OLDEST glibc/Qt the .deb must support (Debian 13 / Ubuntu 26.04). Building
+# on the Fedora 44 host instead would emit binaries requiring a newer glibc
+# and a newer Qt 6 ABI that older distros cannot satisfy. The `depends = "$auto"`
+# in Cargo.toml also relies on `dpkg-shlibdeps` to resolve Qt6 runtime
+# dependencies, which needs a Debian/Ubuntu host to produce a populated
+# `Depends:` field — another reason to build inside Debian 13.
+FROM debian:13
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates build-essential pkg-config cmake \
+    file git \
+    qt6-base-dev libqt6svg6-dev qt6-tools-dev \
+    qt6-declarative-dev \
+    librsvg2-bin \
+    dpkg-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+# Rust stable (edition 2024 requires 1.85+; README states 1.87+).
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+  | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# cargo-deb: emits the .deb from [package.metadata.deb] in Cargo.toml.
+RUN cargo install cargo-deb
+
+WORKDIR /src
