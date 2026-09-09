@@ -26,13 +26,16 @@ QPlainTextEdit *make_log_panel(QWidget *parent, AppBackend *backend) {
         log->appendPlainText(QStringLiteral("[%1] %2").arg(stamp, message));
       });
 
-  // Right-click offers a "Clear logs" action that empties the buffer.
+  // Right-click shows the standard menu (Select All, Copy) plus an appended
+  // "Clear logs" action that empties the buffer.
   QObject::connect(log, &QPlainTextEdit::customContextMenuRequested, log,
                    [log](const QPoint &pos) {
-                     QMenu menu(log);
-                     menu.addAction(QStringLiteral("Clear logs"), log,
-                                    [log] { log->clear(); });
-                     menu.exec(log->viewport()->mapToGlobal(pos));
+                     QMenu *menu = log->createStandardContextMenu();
+                     menu->addSeparator();
+                     menu->addAction(QStringLiteral("Clear logs"), log,
+                                     [log] { log->clear(); });
+                     menu->exec(log->viewport()->mapToGlobal(pos));
+                     delete menu;
                    });
 
   return log;
