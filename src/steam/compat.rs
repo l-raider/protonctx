@@ -150,6 +150,21 @@ pub fn compat_tool_map(steam_root: &Path) -> Result<HashMap<String, String>, Ste
     Ok(map)
 }
 
+/// Resolve an app's compatibility tool name, falling back to Steam's global
+/// default tool when the app has no explicit per-app override.
+///
+/// Steam records the globally-selected default tool under the `"0"` key of
+/// `config.vdf`'s `CompatToolMapping` (the same map [`compat_tool_map`] returns), so a
+/// game that inherits the Steam-wide default is reported with its actual tool rather
+/// than an empty name — which would otherwise make the "Compatibility Tool" column
+/// wrong and force `proton_dir` onto the (documented-stale) `config_info` fallback.
+pub fn compat_tool_for_app(map: &HashMap<String, String>, app_id: u32) -> String {
+    map.get(&app_id.to_string())
+        .or_else(|| map.get("0"))
+        .cloned()
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +352,29 @@ mod tests {
         assert_eq!(proton_dir_for_tool(&root, "default"), None);
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn compat_tool_falls_back_to_global_default() {
+        let mut map = HashMap::new();
+        map.insert("0".to_string(), "proton_experimental".to_string());
+
+        assert_eq!(compat_tool_for_app(&map, 274190), "proton_experimental");
+    }
+
+    #[test]
+    fn compat_tool_prefers_per_app_override() {
+        let mut map = HashMap::new();
+        map.insert("0".to_string(), "proton_experimental".to_string());
+        map.insert("274190".to_string(), "proton_hotfix".to_string());
+
+        assert_eq!(compat_tool_for_app(&map, 274190), "proton_hotfix");
+        assert_eq!(compat_tool_for_app(&map, 730), "proton_experimental");
+    }
+
+    #[test]
+    fn compat_tool_empty_when_no_mapping() {
+        let map: HashMap<String, String> = HashMap::new();
+        assert_eq!(compat_tool_for_app(&map, 274190), "");
     }
 }

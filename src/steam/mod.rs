@@ -134,10 +134,7 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
                 continue;
             }
 
-            let compat_tool = compat_tools
-                .get(&app.app_id.to_string())
-                .cloned()
-                .unwrap_or_default();
+            let compat_tool = compat::compat_tool_for_app(&compat_tools, app.app_id);
 
             // Resolve the Proton directory for this game. The *selected* tool (from
             // config.vdf CompatToolMapping) is authoritative: it is what the row shows and
