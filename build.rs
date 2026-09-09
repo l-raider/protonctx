@@ -19,6 +19,7 @@ fn main() {
             })
     }
     .qt_module("Widgets")
+    .qt_module("Gui")
     .cpp_file("src/qt_main_ui.cpp")
     .cpp_file("src/qt_settings_ui.cpp")
     .cpp_file("src/qt_about_ui.cpp")

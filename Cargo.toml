@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 cxx-qt = "0.10"
-cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
+cxx-qt-lib = "0.10"
 steam-vdf-parser = "0.1"
 cxx = "1.0"
 cxx-gen = "0.7"
