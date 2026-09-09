@@ -6,6 +6,7 @@
 
 mod app_backend;
 mod config;
+mod flatpak;
 mod launcher;
 mod models;
 mod steam;

@@ -31,39 +31,107 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<LaunchedProcess, Laun
     // NOT the Steam root: a game on a secondary library keeps its prefix there.
     let compat_data = compat_data_dir_for(std::path::Path::new(&game.library_path), game.app_id);
 
-    let mut cmd = Command::new(&proton);
-    cmd.arg("runinprefix");
-    cmd.args(args);
-
-    cmd.env("STEAM_COMPAT_DATA_PATH", &compat_data);
-    cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", &root);
-    cmd.env("SteamGameId", game.app_id.to_string());
-    cmd.env("SteamAppId", game.app_id.to_string());
+    // Inside a Flatpak sandbox the `proton` script lives on the *host* and must be
+    // run there via `flatpak-spawn --host` (see `crate::flatpak`). On a normal host
+    // install we invoke it directly. Both paths share the same Steam environment and
+    // pipe the same stdout/stderr, so the caller-side watcher is unchanged.
+    let (mut cmd, command_line) = if crate::flatpak::running_in_flatpak() {
+        (
+            flatpak_spawn_command(&proton, args, &compat_data, &root, game.app_id),
+            format!(
+                "flatpak-spawn --host {} runinprefix {} (prefix: {})",
+                proton.display(),
+                args.join(" "),
+                compat_data.display()
+            ),
+        )
+    } else {
+        let mut direct = Command::new(&proton);
+        direct.arg("runinprefix");
+        direct.args(args);
+        apply_steam_env(&mut direct, &compat_data, &root, game.app_id);
+        (
+            direct,
+            format!(
+                "{} runinprefix {} (prefix: {})",
+                proton.display(),
+                args.join(" "),
+                compat_data.display()
+            ),
+        )
+    };
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
     match cmd.spawn() {
-        Ok(child) => {
-            // Human-readable command line using full paths, so the log shows exactly
-            // what was launched: the proton script, the `runinprefix` verb, the
-            // arguments, and the compatdata (prefix) directory it targets.
-            let command_line = format!(
-                "{} runinprefix {} (prefix: {})",
-                proton.display(),
-                args.join(" "),
-                compat_data.display()
-            );
-            Ok(LaunchedProcess {
-                child,
-                command_line,
-            })
-        }
+        Ok(child) => Ok(LaunchedProcess {
+            child,
+            command_line,
+        }),
         Err(source) => Err(LaunchError::Spawn {
             path: proton,
             source,
         }),
     }
+}
+
+/// Set the Steam compatibility environment on a command that runs the Proton script.
+///
+/// These four variables are what the reference `proton-exec.sh` / `run-exe.sh`
+/// scripts set, and are required for `proton runinprefix` to resolve the correct
+/// prefix and Wine.
+fn apply_steam_env(
+    cmd: &mut Command,
+    compat_data: &std::path::Path,
+    root: &std::path::Path,
+    app_id: u32,
+) {
+    cmd.env("STEAM_COMPAT_DATA_PATH", compat_data);
+    cmd.env("STEAM_COMPAT_CLIENT_INSTALL_PATH", root);
+    cmd.env("SteamGameId", app_id.to_string());
+    cmd.env("SteamAppId", app_id.to_string());
+}
+
+/// Build a `flatpak-spawn --host` command that runs the Proton script on the host.
+///
+/// The Steam environment is forwarded explicitly via `--env=K=V` rather than relying
+/// on implicit propagation, so the host process always receives the exact prefix/root
+/// values even across Flatpak's environment sanitization. stdout/stderr/exit-status are
+/// forwarded by `flatpak-spawn` itself, matching the direct-launch semantics.
+fn flatpak_spawn_command(
+    proton: &std::path::Path,
+    args: &[&str],
+    compat_data: &std::path::Path,
+    root: &std::path::Path,
+    app_id: u32,
+) -> Command {
+    let mut cmd = Command::new("flatpak-spawn");
+    cmd.arg("--host");
+
+    // Forward the Steam environment to the host process explicitly.
+    let env_vars: [(&str, std::ffi::OsString); 4] = [
+        ("STEAM_COMPAT_DATA_PATH", compat_data.as_os_str().to_owned()),
+        ("STEAM_COMPAT_CLIENT_INSTALL_PATH", root.as_os_str().to_owned()),
+        ("SteamGameId", app_id.to_string().into()),
+        ("SteamAppId", app_id.to_string().into()),
+    ];
+    for (key, value) in env_vars {
+        // flatpak-spawn takes `--env=VAR=VALUE` as a single argument (not a
+        // space-separated `--env VAR=VALUE` pair), so build the full token here.
+        let mut arg = std::ffi::OsString::from("--env=");
+        arg.push(key);
+        arg.push("=");
+        arg.push(value);
+        cmd.arg(arg);
+    }
+
+    // The command to run on the host: <proton> runinprefix <args...>.
+    cmd.arg(proton);
+    cmd.arg("runinprefix");
+    cmd.args(args);
+
+    cmd
 }
 
 /// Resolve the Steam installation root for a game.
