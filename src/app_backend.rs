@@ -271,6 +271,14 @@ impl qobject::AppBackend {
         // (`qt_app_exec`) has returned and `queue` is dropped. There is no
         // use-after-free: the qobject lives on the GUI thread, and all mutation
         // is marshalled back to that thread via `queue`.
+        // Surface the sandbox mode once at startup: when running inside a Flatpak,
+        // launches are routed through `flatpak-spawn --host`, so show a log entry
+        // explaining the mode the user is in.
+        if crate::flatpak::running_in_flatpak() {
+            self.as_mut()
+                .log_line(&QString::from("Flatpak environment detected"));
+        }
+
         self.as_mut()
             .set_status_text(QString::from("Loading games..."));
 
