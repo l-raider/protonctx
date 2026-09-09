@@ -5,22 +5,25 @@
 //! The `runinprefix` verb runs the given command via the prefix's Wine, which is what we
 //! want for arbitrary `.exe` files and Wine built-ins (winecfg, taskmgr, ...) alike.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use crate::models::Game;
 
-use super::LaunchError;
+use super::{LaunchError, LaunchedProcess};
 
 /// Run an arbitrary command (`.exe` path or Wine built-in) inside `game`'s Proton prefix.
 ///
 /// `args` are the positional arguments passed after the `runinprefix` verb. This spawns
 /// the process in the background (non-blocking), matching how a GUI launcher should behave.
 ///
-/// Returns the spawned [`std::process::Child`] so the caller can observe when the process
-/// finishes. Note that `proton runinprefix` itself blocks until the target executable exits
-/// (it invokes `subprocess.call`), so waiting on the returned child tracks the lifetime of
-/// the launched executable, not just the wrapper script.
-pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<std::process::Child, LaunchError> {
+/// stdout/stderr are piped so the caller can stream their contents to the UI log; stdin is
+/// left inherited so interactive executables that read from the terminal still work.
+///
+/// Returns the spawned [`LaunchedProcess`] so the caller can observe when the process
+/// finishes and log its output. Note that `proton runinprefix` itself blocks until the
+/// target executable exits (it invokes `subprocess.call`), so waiting on the returned child
+/// tracks the lifetime of the launched executable, not just the wrapper script.
+pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<LaunchedProcess, LaunchError> {
     let proton = game.proton_script().ok_or(LaunchError::NoProtonDir)?;
 
     let root = steam_root_for(game);
@@ -37,8 +40,25 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<std::process::Child, 
     cmd.env("SteamGameId", game.app_id.to_string());
     cmd.env("SteamAppId", game.app_id.to_string());
 
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
     match cmd.spawn() {
-        Ok(child) => Ok(child),
+        Ok(child) => {
+            // Human-readable command line using full paths, so the log shows exactly
+            // what was launched: the proton script, the `runinprefix` verb, the
+            // arguments, and the compatdata (prefix) directory it targets.
+            let command_line = format!(
+                "{} runinprefix {} (prefix: {})",
+                proton.display(),
+                args.join(" "),
+                compat_data.display()
+            );
+            Ok(LaunchedProcess {
+                child,
+                command_line,
+            })
+        }
         Err(source) => Err(LaunchError::Spawn {
             path: proton,
             source,

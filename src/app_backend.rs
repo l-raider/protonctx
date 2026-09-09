@@ -105,6 +105,11 @@ pub mod qobject {
         #[qsignal]
         fn launch_failed(self: Pin<&mut AppBackend>, message: &QString);
 
+        // One log line emitted for every lifecycle event and every captured
+        // stdout/stderr line of a launched process; wired to the log panel in C++.
+        #[qsignal]
+        fn log_line(self: Pin<&mut AppBackend>, message: &QString);
+
         // Invokables called from the C++ UI.
         #[qinvokable]
         fn load_games(self: Pin<&mut AppBackend>);
@@ -418,8 +423,11 @@ impl qobject::AppBackend {
 
         let tool = arg.to_string();
         match launcher::launch_tool(game, &tool) {
-            Ok(child) => {
-                self.start_launch_watcher(child, format!("Running {tool}..."));
+            Ok(proc) => {
+                // Log the launch using the full command line (paths + prefix).
+                let start = QString::from(&format!("Starting {}", proc.command_line));
+                self.as_mut().log_line(&start);
+                self.start_launch_watcher(proc, format!("Running {tool}..."));
             }
             Err(e) => {
                 let msg = QString::from(&format!("Failed to launch {tool}: {e}"));
@@ -437,8 +445,10 @@ impl qobject::AppBackend {
 
         let path = path.to_string();
         match launcher::proton::run_in_prefix(game, &[&path]) {
-            Ok(child) => {
-                self.start_launch_watcher(child, format!("Running {path}..."));
+            Ok(proc) => {
+                let start = QString::from(&format!("Starting {}", proc.command_line));
+                self.as_mut().log_line(&start);
+                self.start_launch_watcher(proc, format!("Running {path}..."));
             }
             Err(e) => {
                 let msg = QString::from(&format!("Failed to launch: {e}"));
@@ -450,14 +460,14 @@ impl qobject::AppBackend {
     /// Record that a launch is now running and spawn a background thread that waits for
     /// the child process to exit, then clears the running state on the Qt thread.
     ///
-    /// The [`std::process::Child`] is moved into the watcher thread (it is not `Sync`, so it
+    /// The [`LaunchedProcess`] is moved into the watcher thread (its `Child` is not `Sync`, so it
     /// cannot live in the qobject struct). A monotonic generation counter ensures a stale
     /// watcher (from an earlier, still-running launch) cannot clobber the status text that a
     /// newer launch has set, while `active_launches` ensures `launch_running` is cleared only
     /// after the last overlapping launch finishes.
     fn start_launch_watcher(
         mut self: Pin<&mut Self>,
-        mut child: std::process::Child,
+        mut proc: launcher::LaunchedProcess,
         status: String,
     ) {
         // Bump the generation so any previously-spawned watcher becomes stale for
@@ -469,10 +479,27 @@ impl qobject::AppBackend {
             state.launch_generation
         };
 
+        // Take the piped stdout/stderr out of the child so dedicated reader threads
+        // can stream them while the watcher thread blocks on the child's exit.
+        let stdout = proc.child.stdout.take();
+        let stderr = proc.child.stderr.take();
+        let mut child = proc.child;
+
         self.as_mut().set_launch_running(true);
         self.as_mut().set_status_text(QString::from(&status));
 
         let qt_thread = self.qt_thread();
+
+        // Stream each captured pipe to the log panel from its own detached thread.
+        // `log_pipe()` takes ownership of the reader (and a clone of the thread
+        // handle) and forwards each line to the GUI thread via `log_line`.
+        if let Some(stdout) = stdout {
+            log_pipe(stdout, qt_thread.clone());
+        }
+        if let Some(stderr) = stderr {
+            log_pipe(stderr, qt_thread.clone());
+        }
+
         // NOTE (lifetime/shutdown): the watcher thread is detached and owns the
         // `Child` (which is not `Sync`, so it cannot live in the qobject struct).
         // This is safe: it only calls `child.wait()` (blocking on the child) and
@@ -494,15 +521,19 @@ impl qobject::AppBackend {
                     (is_latest, still_running)
                 };
 
+                // Each launched process logs its own exit event regardless of
+                // latestness, so overlapping launches each get a matching entry.
+                let finished = match result {
+                    Ok(status) => match status.code() {
+                        Some(0) => "Exit code: 0".to_string(),
+                        Some(code) => format!("Exit code: {code}"),
+                        None => "Process terminated by signal".to_string(),
+                    },
+                    Err(e) => format!("Launch error: {e}"),
+                };
+                app.as_mut().log_line(&QString::from(&finished));
+
                 if is_latest {
-                    let finished = match result {
-                        Ok(status) => match status.code() {
-                            Some(0) => "Finished".to_string(),
-                            Some(code) => format!("Exited with code {code}"),
-                            None => "Finished (terminated by signal)".to_string(),
-                        },
-                        Err(e) => format!("Launch error: {e}"),
-                    };
                     app.as_mut().set_status_text(QString::from(&finished));
                 }
 
@@ -553,6 +584,36 @@ impl AppBackendRust {
         }
         self.games.get(idx as usize)
     }
+}
+
+/// Stream one captured pipe (stdout or stderr) of a launched child to the log panel.
+///
+/// Runs on its own detached thread: it reads `reader` line-by-line (blocking until the
+/// child closes the pipe) and forwards each line to the GUI thread via `log_line`.
+/// On shutdown, returning from `main()` terminates the thread; queued lines are simply
+/// never delivered once the event loop has returned.
+fn log_pipe<R: std::io::Read + Send + 'static>(
+    reader: R,
+    qt_thread: cxx_qt::CxxQtThread<qobject::AppBackend>,
+) {
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(reader).lines() {
+            let text = match line {
+                Ok(text) => text,
+                Err(e) => {
+                    let _ = qt_thread.queue(move |mut app| {
+                        let msg = QString::from(&format!("read error: {e}"));
+                        app.as_mut().log_line(&msg);
+                    });
+                    break;
+                }
+            };
+            let _ = qt_thread.queue(move |mut app| {
+                app.as_mut().log_line(&QString::from(&text));
+            });
+        }
+    });
 }
 
 /// The sort key for a given column index ([`column::NAME`], [`column::APP_ID`], [`column::COMPAT_TOOL`]).

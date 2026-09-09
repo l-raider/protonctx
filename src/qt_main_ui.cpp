@@ -15,8 +15,10 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QMenuBar>
 #include <QtWidgets/QMessageBox>
+#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QSplitter>
 #include <QtWidgets/QStatusBar>
 #include <QtWidgets/QTableView>
 #include <QtWidgets/QVBoxLayout>
@@ -32,6 +34,7 @@
 // actions in wire_signals() can call them.
 void show_about_dialog(QWidget *parent);
 void show_settings_dialog(QWidget *parent, AppBackend *backend);
+QPlainTextEdit *make_log_panel(QWidget *parent, AppBackend *backend);
 
 static int s_argc = 1;
 static char s_argv0[] = "protonctx";
@@ -344,9 +347,25 @@ void qt_show_main_window() {
   setup_table(table_view);
   setup_context_menu(table_view, backend, browse_button);
 
-  // Table first, action buttons below it.
-  main_layout->addWidget(table_view, 1);
-  main_layout->addLayout(actions_layout);
+  // Table + action buttons live in the top pane of a vertical splitter; the log
+  // panel fills the bottom pane. The splitter stays user-resizable so either
+  // pane's height can be adjusted at runtime.
+  auto *top_pane = new QWidget(window);
+  auto *top_layout = new QVBoxLayout(top_pane);
+  top_layout->setContentsMargins(0, 0, 0, 0);
+  top_layout->setSpacing(4);
+  top_layout->addWidget(table_view, 1);
+  top_layout->addLayout(actions_layout);
+
+  auto *splitter = new QSplitter(Qt::Vertical, central_widget);
+  splitter->addWidget(top_pane);
+  splitter->addWidget(make_log_panel(splitter, backend));
+  splitter->setStretchFactor(0, 1);
+  splitter->setStretchFactor(1, 0);
+  // Start with the table pane dominating; the log pane gets a modest height.
+  splitter->setSizes({420, 140});
+
+  main_layout->addWidget(splitter, 1);
 
   // Indeterminate progress bar shown while a launch is running. A QProgressBar
   // with range (0,0) animates a "busy" indicator whenever it is visible, so

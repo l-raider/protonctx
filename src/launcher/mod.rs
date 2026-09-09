@@ -4,6 +4,14 @@ pub mod proton;
 
 use crate::models::Game;
 
+/// A spawned Proton launch: the live child process plus the human-readable command
+/// line used to start it (built from full paths so the UI log can show exactly what
+/// was executed).
+pub struct LaunchedProcess {
+    pub child: std::process::Child,
+    pub command_line: String,
+}
+
 /// What kind of command we're launching into a prefix.
 #[derive(Debug)]
 pub enum LaunchError {
@@ -44,10 +52,10 @@ impl std::error::Error for LaunchError {
 
 /// Launch a built-in Wine tool (e.g. `winecfg`) in the game's prefix.
 ///
-/// Returns the spawned [`std::process::Child`] so the caller can track its
-/// lifetime. Because `proton runinprefix` blocks until the target executable
-/// exits (it calls `subprocess.call`), waiting on this child is equivalent to
-/// waiting for the launched tool to finish.
-pub fn launch_tool(game: &Game, tool: &str) -> Result<std::process::Child, LaunchError> {
+/// Returns the spawned [`LaunchedProcess`] so the caller can track its lifetime
+/// and log its output. Because `proton runinprefix` blocks until the target
+/// executable exits (it calls `subprocess.call`), waiting on the child is
+/// equivalent to waiting for the launched tool to finish.
+pub fn launch_tool(game: &Game, tool: &str) -> Result<LaunchedProcess, LaunchError> {
     proton::run_in_prefix(game, &[tool])
 }

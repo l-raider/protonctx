@@ -22,6 +22,7 @@ fn main() {
     .cpp_file("src/qt_main_ui.cpp")
     .cpp_file("src/qt_settings_ui.cpp")
     .cpp_file("src/qt_about_ui.cpp")
+    .cpp_file("src/qt_logs_ui.cpp")
     .qrc("src/qt/resources.qrc")
     .files(["src/app_backend.rs"])
     .build();
