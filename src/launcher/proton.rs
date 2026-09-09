@@ -35,17 +35,43 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<LaunchedProcess, Laun
     // run there via `flatpak-spawn --host` (see `crate::flatpak`). On a normal host
     // install we invoke it directly. Both paths share the same Steam environment and
     // pipe the same stdout/stderr, so the caller-side watcher is unchanged.
-    let (mut cmd, command_line) = if crate::flatpak::running_in_flatpak() {
-        (
-            flatpak_spawn_command(&proton, args, &compat_data, &root, game.app_id),
-            format!(
-                "flatpak-spawn --host {} runinprefix {} (prefix: {})",
-                proton.display(),
-                args.join(" "),
-                compat_data.display()
-            ),
-        )
-    } else {
+    if crate::flatpak::running_in_flatpak() {
+        // Arguments (e.g. a picked `.exe`) may be document-portal aliases that only
+        // resolve inside the sandbox; translate them to their real host origin so
+        // Wine on the host can open them.
+        let resolved: Vec<String> = args
+            .iter()
+            .map(|a| crate::flatpak::resolve_host_path(a).unwrap_or_else(|| (*a).to_string()))
+            .collect();
+        let resolved_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
+        let mut cmd = flatpak_spawn_command(
+            &proton,
+            &resolved_refs,
+            &compat_data,
+            &root,
+            game.app_id,
+        );
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        return match cmd.spawn() {
+            Ok(child) => Ok(LaunchedProcess {
+                child,
+                command_line: format!(
+                    "flatpak-spawn --host {} runinprefix {} (prefix: {})",
+                    proton.display(),
+                    resolved_refs.join(" "),
+                    compat_data.display()
+                ),
+            }),
+            Err(source) => Err(LaunchError::Spawn {
+                path: proton,
+                source,
+            }),
+        };
+    }
+
+    let (mut cmd, command_line) = {
         let mut direct = Command::new(&proton);
         direct.arg("runinprefix");
         direct.args(args);

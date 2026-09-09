@@ -42,6 +42,55 @@ fn detect() -> bool {
     std::env::var_os("FLATPAK_ID").is_some()
 }
 
+/// Resolve a path returned by the file-chooser portal to its real host origin, so
+/// it can be passed to a host-side process via `flatpak-spawn --host`.
+///
+/// Inside the sandbox, picking a file the sandbox has no direct filesystem access
+/// to (e.g. an `.exe` on a Steam library outside `$HOME`) yields a *document
+/// portal* path of the form `/run/user/$UID/doc/$DOC_ID/<name>` — a read-only
+/// FUSE alias that is only meaningful inside the sandbox. Wine running on the host
+/// cannot open that alias ("file not found"). This resolves it back to the real
+/// path by asking the host's document portal (`flatpak document-info`, itself
+/// spawned on the host via `flatpak-spawn --host`) for the document's `origin:`.
+///
+/// Returns `None` for paths that need no translation (anything that is not a
+/// document-portal alias), and when resolution fails — in which case the caller
+/// falls back to using the path verbatim. This makes the call safe to apply
+/// unconditionally to every launch argument when inside a sandbox.
+pub fn resolve_host_path(path: &str) -> Option<String> {
+    if !is_doc_path(path) {
+        return None;
+    }
+
+    // The document portal lives on the host, so resolve there via
+    // `flatpak-spawn --host`.
+    let output = std::process::Command::new("flatpak-spawn")
+        .arg("--host")
+        .arg("flatpak")
+        .arg("document-info")
+        .arg(path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    // `flatpak document-info` prints an `origin: <real path>` line.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("origin: "))
+        .map(|origin| origin.trim().to_string())
+}
+
+/// Whether `path` is a document-portal alias (`/run/user/<uid>/doc/<docid>/...`).
+fn is_doc_path(path: &str) -> bool {
+    // /run/user/<uid>/doc/<...>
+    path.strip_prefix("/run/user/")
+        .map(|rest| rest.split('/').nth(1) == Some("doc"))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,5 +109,22 @@ mod tests {
         // Just documents the contract: a bool, not a Result — callers never need
         // to handle a detection error.
         let _: bool = running_in_flatpak();
+    }
+
+    #[test]
+    fn doc_path_detection() {
+        assert!(is_doc_path("/run/user/1000/doc/O9IM4y7CjO949_dSnoxh2g/trainer.exe"));
+        assert!(is_doc_path("/run/user/0/doc/abc123/file.txt"));
+        // Not named `doc` after the uid, or not under /run/user at all.
+        assert!(!is_doc_path("/run/user/1000/foo/trainer.exe"));
+        assert!(!is_doc_path("/home/user/trainer.exe"));
+        assert!(!is_doc_path("/run/other/1000/doc/x"));
+    }
+
+    #[test]
+    fn resolve_host_path_ignores_non_doc_paths() {
+        // Non-doc paths should pass through unchanged (return None) without
+        // spawning any subprocess.
+        assert_eq!(resolve_host_path("/home/user/trainer.exe"), None);
     }
 }
