@@ -69,6 +69,7 @@ pub mod qobject {
         #[qproperty(QString, app_version)]
         #[qproperty(bool, remember_last_dir)]
         #[qproperty(bool, launch_running)]
+        #[qproperty(bool, loading)]
         type AppBackend = super::AppBackendRust;
 
         // QAbstractTableModel overrides.
@@ -158,6 +159,9 @@ pub struct AppBackendRust {
     remember_last_dir: bool,
     /// Whether a launch is currently in flight (drives the status-bar progress indicator).
     launch_running: bool,
+    /// Whether a game-discovery scan is currently in flight (drives the disabled
+    /// state of the "Refresh Games" action).
+    loading: bool,
     /// Number of launched-but-not-yet-exited child processes. Kept separate from
     /// `launch_running` so that overlapping launches clear the progress indicator only
     /// after the *last* one finishes.
@@ -183,6 +187,7 @@ impl Default for AppBackendRust {
             app_version: QString::from(env!("CARGO_PKG_VERSION")),
             remember_last_dir: config.remember_last_dir,
             launch_running: false,
+            loading: false,
             active_launches: 0,
             launch_generation: 0,
             role_names,
@@ -290,15 +295,21 @@ impl qobject::AppBackend {
             state.load_generation
         };
 
+        // Mark the scan as in flight so the "Refresh Games" action is disabled
+        // until it completes.
+        self.as_mut().set_loading(true);
+
         let qt_thread = self.qt_thread();
         std::thread::spawn(move || {
             let result = crate::steam::discover_games();
             let _ = qt_thread.queue(move |mut app| {
                 // A newer load superseded this one while discovery was running;
                 // discard the stale result rather than clobbering the latest.
+                // The newer load owns the `loading` flag, so leave it set.
                 if generation != app.as_ref().rust().load_generation {
                     return;
                 }
+                app.as_mut().set_loading(false);
                 let (games, status) = match result {
                     Ok(mut games) => {
                         // Default view: sorted by game name, ascending (matches

@@ -5,6 +5,7 @@
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QIcon>
+#include <QtGui/QKeySequence>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
@@ -70,11 +71,14 @@ constexpr ToolButton k_tool_buttons[] = {
     {"Wine Configuration", "winecfg"},
 };
 
-// Build the File/About menus and wire Exit. Returns the Settings and About
-// actions so their `triggered` signals can be wired later.
-void setup_menu_bar(QMainWindow *window, QAction **settings_action,
-                    QAction **about_action) {
+// Build the File/About menus and wire Exit. Returns the Refresh, Settings and
+// About actions so their `triggered` signals can be wired later.
+void setup_menu_bar(QMainWindow *window, QAction **refresh_action,
+                    QAction **settings_action, QAction **about_action) {
   auto *file_menu = window->menuBar()->addMenu(QStringLiteral("File"));
+  *refresh_action = file_menu->addAction(QStringLiteral("Refresh Games"));
+  // Platform-standard refresh shortcut (F5 on Linux/Windows).
+  (*refresh_action)->setShortcut(QKeySequence::Refresh);
   *settings_action = file_menu->addAction(QStringLiteral("Settings"));
   file_menu->addSeparator();
   auto *exit_action = file_menu->addAction(QStringLiteral("Exit"));
@@ -180,7 +184,8 @@ void wire_signals(QMainWindow *window, QWidget *central_widget,
                   QLabel *status_label, QLabel *selection_label,
                   QPushButton *browse_button,
                   const std::shared_ptr<SortState> &sort_state,
-                  QAction *settings_action, QAction *about_action,
+                  QAction *refresh_action, QAction *settings_action,
+                  QAction *about_action,
                   const std::function<void()> &sync_action_state) {
   // Selection -> backend.selected_row -> button state + selection label.
   QObject::connect(
@@ -287,6 +292,16 @@ void wire_signals(QMainWindow *window, QWidget *central_widget,
       [window, backend](bool) { show_settings_dialog(window, backend); });
   QObject::connect(about_action, &QAction::triggered, window,
                    [window](bool) { show_about_dialog(window); });
+
+  // Refresh Games: re-run Steam discovery and repopulate the table without
+  // restarting the app. Disabled while a scan is in flight (loadingChanged).
+  QObject::connect(refresh_action, &QAction::triggered, window,
+                   [backend](bool) { backend->load_games(); });
+  refresh_action->setEnabled(!backend->getLoading());
+  QObject::connect(backend, &AppBackend::loadingChanged, refresh_action,
+                   [refresh_action, backend]() {
+                     refresh_action->setEnabled(!backend->getLoading());
+                   });
 }
 
 } // namespace
@@ -330,7 +345,8 @@ void qt_show_main_window() {
 
   QAction *settings_action = nullptr;
   QAction *about_action = nullptr;
-  setup_menu_bar(window, &settings_action, &about_action);
+  QAction *refresh_action = nullptr;
+  setup_menu_bar(window, &refresh_action, &settings_action, &about_action);
 
   main_layout->setContentsMargins(6, 6, 6, 6);
   main_layout->setSpacing(4);
@@ -397,8 +413,8 @@ void qt_show_main_window() {
   };
 
   wire_signals(window, central_widget, table_view, backend, status_label,
-               selection_label, browse_button, sort_state, settings_action,
-               about_action, sync_action_state);
+               selection_label, browse_button, sort_state, refresh_action,
+               settings_action, about_action, sync_action_state);
 
   s_backend = backend;
 
