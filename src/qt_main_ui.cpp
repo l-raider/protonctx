@@ -356,7 +356,8 @@ void qt_show_main_window() {
   top_layout->setSpacing(4);
   top_layout->addWidget(table_view, 1);
   top_layout->addLayout(actions_layout);
-
+  // Small gap between the action buttons and the log panel below.
+  top_layout->addSpacing(5);
   auto *splitter = new QSplitter(Qt::Vertical, central_widget);
   splitter->addWidget(top_pane);
   splitter->addWidget(make_log_panel(splitter, backend));
