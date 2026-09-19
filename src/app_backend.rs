@@ -126,6 +126,12 @@ pub mod qobject {
         #[cxx_name = "protonDirPath"]
         fn proton_dir_path(self: &AppBackend, row: i32) -> QString;
         #[qinvokable]
+        #[cxx_name = "shaderCachePath"]
+        fn shader_cache_path(self: &AppBackend, row: i32) -> QString;
+        #[qinvokable]
+        #[cxx_name = "deleteShaderCache"]
+        fn delete_shader_cache(self: Pin<&mut AppBackend>, row: i32) -> bool;
+        #[qinvokable]
         fn sort_by(self: Pin<&mut AppBackend>, column: i32, ascending: bool);
         #[qinvokable]
         fn launch_tool(self: Pin<&mut AppBackend>, arg: &QString);
@@ -395,6 +401,68 @@ impl qobject::AppBackend {
             .get(row as usize)
             .map(|game| QString::from(&game.proton_dir))
             .unwrap_or_default()
+    }
+
+    /// The absolute path of the game's shader-cache directory, i.e.
+    /// `<library>/steamapps/shadercache/<app_id>`, or an empty string if the row is out
+    /// of range. Like the prefix, the cache lives under the library the game is
+    /// installed in, so a game on a secondary library resolves there, not under the
+    /// Steam root. The path is *derived* from the library root (`libraryfolders.vdf`),
+    /// never hardcoded; the directory may not exist yet if the game has never run.
+    fn shader_cache_path(&self, row: i32) -> QString {
+        let Some(game) = self.rust().games.get(row as usize) else {
+            return QString::default();
+        };
+
+        let path = crate::steam::shadercache::shader_cache_dir_for(
+            std::path::Path::new(&game.library_path),
+            game.app_id,
+        );
+
+        QString::from(&path.to_string_lossy().into_owned())
+    }
+
+    /// Delete the selected game's shader-cache directory.
+    ///
+    /// Returns `true` when the cache existed and was removed, `false` when there was
+    /// nothing to delete. Failures (including the safety guard rejecting an unexpected
+    /// path) are reported through the existing `launch_failed` signal, which the UI
+    /// surfaces as a message box, so no new error plumbing is needed.
+    fn delete_shader_cache(mut self: Pin<&mut Self>, row: i32) -> bool {
+        let Some(game) = self.rust().games.get(row as usize) else {
+            let msg = QString::from("No game selected");
+            self.as_mut().launch_failed(&msg);
+            return false;
+        };
+
+        let library = std::path::Path::new(&game.library_path);
+        match crate::steam::shadercache::delete_shader_cache(library, game.app_id) {
+            Ok(true) => {
+                let msg = QString::from(&format!(
+                    "Deleted shader cache for {} (app id {})",
+                    game.name, game.app_id
+                ));
+                self.as_mut().log_line(&msg);
+                self.as_mut()
+                    .set_status_text(QString::from("Shader cache deleted"));
+                true
+            }
+            Ok(false) => {
+                let msg = QString::from(&format!(
+                    "No shader cache found for {} (app id {})",
+                    game.name, game.app_id
+                ));
+                self.as_mut().log_line(&msg);
+                self.as_mut()
+                    .set_status_text(QString::from("No shader cache to delete"));
+                false
+            }
+            Err(e) => {
+                let msg = QString::from(&format!("Failed to delete shader cache: {e}"));
+                self.as_mut().launch_failed(&msg);
+                false
+            }
+        }
     }
 
     fn sort_by(mut self: Pin<&mut Self>, column: i32, ascending: bool) {

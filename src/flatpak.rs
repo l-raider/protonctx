@@ -113,7 +113,9 @@ mod tests {
 
     #[test]
     fn doc_path_detection() {
-        assert!(is_doc_path("/run/user/1000/doc/O9IM4y7CjO949_dSnoxh2g/trainer.exe"));
+        assert!(is_doc_path(
+            "/run/user/1000/doc/O9IM4y7CjO949_dSnoxh2g/trainer.exe"
+        ));
         assert!(is_doc_path("/run/user/0/doc/abc123/file.txt"));
         // Not named `doc` after the uid, or not under /run/user at all.
         assert!(!is_doc_path("/run/user/1000/foo/trainer.exe"));

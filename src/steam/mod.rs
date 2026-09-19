@@ -12,6 +12,7 @@ pub mod compatdata;
 pub mod libraryfolders;
 pub mod locations;
 pub mod manifest;
+pub mod shadercache;
 
 use crate::models::Game;
 

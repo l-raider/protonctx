@@ -44,13 +44,8 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<LaunchedProcess, Laun
             .map(|a| crate::flatpak::resolve_host_path(a).unwrap_or_else(|| (*a).to_string()))
             .collect();
         let resolved_refs: Vec<&str> = resolved.iter().map(String::as_str).collect();
-        let mut cmd = flatpak_spawn_command(
-            &proton,
-            &resolved_refs,
-            &compat_data,
-            &root,
-            game.app_id,
-        );
+        let mut cmd =
+            flatpak_spawn_command(&proton, &resolved_refs, &compat_data, &root, game.app_id);
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -138,7 +133,10 @@ fn flatpak_spawn_command(
     // Forward the Steam environment to the host process explicitly.
     let env_vars: [(&str, std::ffi::OsString); 4] = [
         ("STEAM_COMPAT_DATA_PATH", compat_data.as_os_str().to_owned()),
-        ("STEAM_COMPAT_CLIENT_INSTALL_PATH", root.as_os_str().to_owned()),
+        (
+            "STEAM_COMPAT_CLIENT_INSTALL_PATH",
+            root.as_os_str().to_owned(),
+        ),
         ("SteamGameId", app_id.to_string().into()),
         ("SteamAppId", app_id.to_string().into()),
     ];

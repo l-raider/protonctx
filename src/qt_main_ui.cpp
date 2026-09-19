@@ -151,6 +151,37 @@ void setup_context_menu(QTableView *table_view, AppBackend *backend,
                            QGuiApplication::clipboard()->setText(path);
                          }
                        });
+        menu.addSeparator();
+        // Destructive: resolve the cache path up front so the item can be
+        // disabled when the game has no cache yet.
+        const QString cache_path = backend->shaderCachePath(index.row());
+        auto *delete_cache_action = menu.addAction(
+            QStringLiteral("Delete Shader Cache"), &menu,
+            [backend, table_view] {
+              // Re-resolve the selected row at action time: an
+              // async model reset (load/sort/refresh) can
+              // invalidate the right-clicked index while the
+              // menu is open.
+              const int row = backend->getSelected_row();
+              const QString path = backend->shaderCachePath(row);
+              if (path.isEmpty()) {
+                return;
+              }
+              const auto answer = QMessageBox::warning(
+                  table_view->window(), QStringLiteral("Delete Shader Cache"),
+                  QStringLiteral("This will permanently delete the shader "
+                                 "cache directory:\n\n%1\n\n"
+                                 "Shader caches are rebuilt automatically "
+                                 "the next time the game runs, but for best "
+                                 "results close the game before deleting.")
+                      .arg(path),
+                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+              if (answer == QMessageBox::Yes) {
+                backend->deleteShaderCache(row);
+              }
+            });
+        delete_cache_action->setEnabled(!cache_path.isEmpty() &&
+                                        QFileInfo::exists(cache_path));
         menu.exec(table_view->viewport()->mapToGlobal(pos));
       });
 }

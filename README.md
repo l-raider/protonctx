@@ -15,7 +15,7 @@ selected game's Proton prefix.
 - "Select" a game, then either **Browse…** for an executable or launch a built-in tool
   (`winecfg`, Task Manager, Explorer, Registry Editor).
 - Right-click a row for a context menu (launch tools, copy the compatdata or
-  compatibility-tool path).
+  compatibility-tool path, or **delete the game's shader cache**).
 - Standard top menu with **Settings** (remember the last-used directory) and **About**
   (version info).
 
@@ -49,6 +49,25 @@ are rendered from `ui/icon/icon.svg` at build time, so `rsvg-convert`
 ```sh
 cargo run
 ```
+
+### Flatpak: write access for shader-cache deletion
+
+The Flatpak manifest deliberately grants **read-only** access to `$HOME`, which
+is enough to discover games and launch executables but not to modify anything on
+disk. The **Delete Shader Cache** action writes to Steam's library directories
+(removing `<library>/steamapps/shadercache/<app-id>`), so it will fail inside the
+sandbox unless you grant write access to the relevant Steam locations yourself.
+
+Grant access to each library you use, for example:
+
+```sh
+flatpak override --user --filesystem=~/.local/share/Steam io.github.l_raider.protonctx
+# repeat for any secondary libraries listed in libraryfolders.vdf
+```
+
+Use `flatpak override --user --nofilesystem=...` to revoke it again. Without this,
+the read-only features (game list, launching, copying paths) keep working
+normally; only deletion is affected.
 
 ## How it works
 
