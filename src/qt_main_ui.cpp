@@ -37,6 +37,11 @@ void show_about_dialog(QWidget *parent);
 void show_settings_dialog(QWidget *parent, AppBackend *backend);
 QPlainTextEdit *make_log_panel(QWidget *parent, AppBackend *backend);
 
+// QApplication needs an `argc`/`argv` pair. The process's real arguments are not
+// forwarded (Rust's `main` receives them but the FFI entry points take none), so Qt
+// always sees a single synthetic program name. This is deliberate — the app takes no
+// command-line options today. If Qt options (e.g. `-platform`, `--version`) are ever
+// wanted, `main.rs` must pass the real argv through to `qt_app_init`.
 static int s_argc = 1;
 static char s_argv0[] = "protonctx";
 static char *s_argv[] = {s_argv0, nullptr};
@@ -53,11 +58,18 @@ static QPointer<AppBackend> s_backend;
 
 namespace {
 
-// Default view: sorted by Game name, ascending, matching `load_games()`.
+// Initial sort state: by Game name, ascending — the same default the model
+// falls back to when a load is requested with an out-of-range column.
 struct SortState {
   int column = 0;
   Qt::SortOrder order = Qt::AscendingOrder;
 };
+
+// The live header sort state, shared with `qt_load_games()` (an `extern "C"`
+// entry point called from Rust that has no access to the window's locals). It is
+// created in `qt_show_main_window()` and read whenever a load is kicked off, so
+// a refresh preserves the user's chosen order.
+std::shared_ptr<SortState> s_sort_state;
 
 struct ToolButton {
   const char *label;
@@ -326,8 +338,13 @@ void wire_signals(QMainWindow *window, QWidget *central_widget,
 
   // Refresh Games: re-run Steam discovery and repopulate the table without
   // restarting the app. Disabled while a scan is in flight (loadingChanged).
+  // The current header sort is forwarded so the refresh keeps the user's order.
   QObject::connect(refresh_action, &QAction::triggered, window,
-                   [backend](bool) { backend->load_games(); });
+                   [backend, sort_state](bool) {
+                     backend->load_games(
+                         sort_state->column,
+                         sort_state->order == Qt::AscendingOrder);
+                   });
   refresh_action->setEnabled(!backend->getLoading());
   QObject::connect(backend, &AppBackend::loadingChanged, refresh_action,
                    [refresh_action, backend]() {
@@ -373,6 +390,7 @@ void qt_show_main_window() {
   auto *status_label = new QLabel();
   auto *selection_label = new QLabel();
   auto sort_state = std::make_shared<SortState>();
+  s_sort_state = sort_state;
 
   QAction *settings_action = nullptr;
   QAction *about_action = nullptr;
@@ -469,7 +487,13 @@ void qt_show_main_window() {
 
 void qt_load_games() {
   if (s_main_window && s_backend) {
-    s_backend->load_games();
+    // Pass the current header sort so a refresh keeps the user's chosen order
+    // (and the header indicator stays truthful). Falls back to name-asc when no
+    // window has been built yet.
+    const int column = s_sort_state ? s_sort_state->column : 0;
+    const bool ascending =
+        !s_sort_state || s_sort_state->order == Qt::AscendingOrder;
+    s_backend->load_games(column, ascending);
   }
 }
 }

@@ -66,7 +66,6 @@ pub mod qobject {
         #[base = QAbstractTableModel]
         #[qproperty(i32, selected_row)]
         #[qproperty(QString, status_text)]
-        #[qproperty(QString, app_version)]
         #[qproperty(bool, remember_last_dir)]
         #[qproperty(bool, launch_running)]
         #[qproperty(bool, loading)]
@@ -112,8 +111,11 @@ pub mod qobject {
         fn log_line(self: Pin<&mut AppBackend>, message: &QString);
 
         // Invokables called from the C++ UI.
+        //
+        // `load_games` takes the caller's current sort (the C++ header state) so a
+        // refresh preserves the user's chosen order instead of resetting to name-asc.
         #[qinvokable]
-        fn load_games(self: Pin<&mut AppBackend>);
+        fn load_games(self: Pin<&mut AppBackend>, column: i32, ascending: bool);
         #[qinvokable]
         fn select_row(self: Pin<&mut AppBackend>, row: i32);
         #[qinvokable]
@@ -159,8 +161,6 @@ pub struct AppBackendRust {
     selected_row: i32,
     /// Status-bar text.
     status_text: QString,
-    /// Application version, shown in the About dialog.
-    app_version: QString,
     /// Whether the "Browse…" file picker remembers (and reopens at) the last directory.
     remember_last_dir: bool,
     /// Whether a launch is currently in flight (drives the status-bar progress indicator).
@@ -190,7 +190,6 @@ impl Default for AppBackendRust {
             games: Vec::new(),
             selected_row: -1,
             status_text: QString::from("Ready"),
-            app_version: QString::from(env!("CARGO_PKG_VERSION")),
             remember_last_dir: config.remember_last_dir,
             launch_running: false,
             loading: false,
@@ -267,7 +266,7 @@ impl qobject::AppBackend {
         self.rust().role_names.clone()
     }
 
-    fn load_games(mut self: Pin<&mut Self>) {
+    fn load_games(mut self: Pin<&mut Self>, column: i32, ascending: bool) {
         // Discovery performs an unbounded FS scan, so run it on a background
         // thread rather than blocking the GUI thread before the event loop runs.
         // Results are delivered back onto the Qt event loop via `CxxQtThread`;
@@ -293,6 +292,14 @@ impl qobject::AppBackend {
         self.as_mut()
             .set_status_text(QString::from("Loading games..."));
 
+        // Clamp the requested sort column to the known range; an out-of-range
+        // value (e.g. from a stale caller) falls back to the default name-asc.
+        let sort_column = if column < 0 || column >= column::COUNT as i32 {
+            column::NAME
+        } else {
+            column as usize
+        };
+
         // Bump the generation up front, so a stale in-flight result is dropped
         // if `load_games` is invoked again before this scan finishes.
         let generation = {
@@ -316,28 +323,52 @@ impl qobject::AppBackend {
                     return;
                 }
                 app.as_mut().set_loading(false);
-                let (games, status) = match result {
-                    Ok(mut games) => {
-                        // Default view: sorted by game name, ascending (matches
-                        // the C++ sort indicator).
-                        games.sort_by_key(|game| sort_key(game, column::NAME));
+                let (games, status, warnings) = match result {
+                    Ok(discovery) => {
+                        // Preserve the caller's current sort order (the header
+                        // indicator state) rather than always resetting to
+                        // name-asc, so a refresh does not silently reorder the
+                        // table under the user.
+                        let mut games = discovery.games;
+                        games.sort_by(|a, b| {
+                            let a_val = sort_key(a, sort_column);
+                            let b_val = sort_key(b, sort_column);
+                            if ascending {
+                                a_val.cmp(&b_val)
+                            } else {
+                                b_val.cmp(&a_val)
+                            }
+                        });
                         let count = games.len();
                         let status = match count {
                             0 => "No games found".to_string(),
                             1 => "1 game loaded".to_string(),
                             n => format!("{n} games loaded"),
                         };
-                        (games, status)
+                        (games, status, discovery.warnings)
                     }
                     Err(crate::steam::SteamError::SteamNotFound) => {
-                        (Vec::new(), "Steam not found".to_string())
+                        (Vec::new(), "Steam not found".to_string(), Vec::new())
                     }
                     Err(e) => {
                         let msg = format!("Failed to discover games: {e}");
-                        eprintln!("protonctx: {msg}");
-                        (Vec::new(), msg)
+                        (Vec::new(), msg.clone(), vec![msg])
                     }
                 };
+
+                // Surface non-fatal scan problems in the log panel: stderr is not
+                // visible to a desktop-launched app.
+                for warning in &warnings {
+                    app.as_mut().log_line(&QString::from(warning));
+                }
+
+                // Clear the selection *before* the reset: the C++ `modelReset`
+                // handler runs synchronously inside `end_reset_model()` and
+                // restores the view selection from `selected_row`. Setting it
+                // afterwards would leave the view showing a stale row while the
+                // backend reports no selection (and the action buttons disabled).
+                // `sort_by` relies on the same ordering.
+                app.as_mut().set_selected_row(-1);
 
                 unsafe {
                     app.as_mut().begin_reset_model();
@@ -347,7 +378,6 @@ impl qobject::AppBackend {
                     app.as_mut().end_reset_model();
                 }
 
-                app.as_mut().set_selected_row(-1);
                 app.as_mut().set_status_text(QString::from(&status));
             });
         });

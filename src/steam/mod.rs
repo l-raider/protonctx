@@ -79,12 +79,31 @@ fn default_library_fallback(steam_root: &std::path::Path) -> Vec<std::path::Path
     }
 }
 
+/// The outcome of a successful discovery scan: the games plus any non-fatal
+/// problems worth surfacing to the user (corrupt `config.vdf`, unreadable
+/// manifest directories, unresolvable prefixes).
+///
+/// Warnings are returned rather than printed so the GUI can show them in the log
+/// panel; `eprintln!` alone is invisible to a desktop-launched app.
+#[derive(Debug, Default)]
+pub struct Discovery {
+    pub games: Vec<Game>,
+    pub warnings: Vec<String>,
+}
+
+/// Maximum number of per-app warnings collected in one scan, so a library with a
+/// systematically broken prefix directory cannot produce unbounded output.
+const MAX_WARNINGS: usize = 20;
+
 /// Discover the installed Steam games across all library folders.
 ///
 /// Returns `Err(SteamError::SteamNotFound)` when Steam cannot be located, so the
-/// GUI can distinguish "Steam missing" from an empty library.
-pub fn discover_games() -> Result<Vec<Game>, SteamError> {
+/// GUI can distinguish "Steam missing" from an empty library. Non-fatal problems
+/// are reported in [`Discovery::warnings`] instead of aborting the scan.
+pub fn discover_games() -> Result<Discovery, SteamError> {
     let steam_root = locations::find_steam_root().ok_or(SteamError::SteamNotFound)?;
+
+    let mut warnings: Vec<String> = Vec::new();
 
     let libraries = match libraryfolders::library_folders(&steam_root) {
         Ok(libs) if !libs.is_empty() => libs,
@@ -99,17 +118,21 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
         Err(e) => {
             // Non-fatal: a corrupt config.vdf just means we can't show per-game
             // tool names, not that discovery itself failed.
-            eprintln!("protonctx: failed to parse config.vdf: {e}");
+            warnings.push(format!("Failed to parse config.vdf: {e}"));
             std::collections::HashMap::new()
         }
     };
 
     let mut games = Vec::new();
+    // Built once for the whole scan: the internal-name → install-dir map for
+    // built-in Proton tools. Resolving it per game would re-read and VDF-parse
+    // every appmanifest on each iteration (O(games × manifests)).
+    let builtin_tools = compat::builtin_tool_dirs(&steam_root);
     for library in &libraries {
         let apps = match manifest::installed_apps(library) {
             Ok(apps) => apps,
             Err(e) => {
-                eprintln!("protonctx: failed to read manifests in {library:?}: {e}");
+                warnings.push(format!("Failed to read manifests in {library:?}: {e}"));
                 continue;
             }
         };
@@ -143,16 +166,18 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
             // *created* the prefix and goes stale when the user switches tools in Steam
             // without recreating the prefix, so it is only a fallback for games whose
             // selected tool cannot be located (e.g. a non-Proton layer like Boxtron).
-            let proton_dir = crate::steam::compat::proton_dir_for_tool(&steam_root, &compat_tool)
+            let proton_dir = compat::proton_dir_for_tool(&steam_root, &builtin_tools, &compat_tool)
                 .or_else(|| {
                     compatdata::proton_dir_for(library, app.app_id).unwrap_or_else(|e| {
                         // A bad `compatdata/<id>/config_info` (e.g. permission denied)
                         // must not abort the whole discovery — just leave the prefix
                         // unresolved for this one game, like a manifest error does.
-                        eprintln!(
-                            "protonctx: failed to resolve proton dir for app {}: {e}",
-                            app.app_id
-                        );
+                        if warnings.len() < MAX_WARNINGS {
+                            warnings.push(format!(
+                                "Failed to resolve proton dir for app {}: {e}",
+                                app.app_id
+                            ));
+                        }
                         None
                     })
                 })
@@ -177,7 +202,7 @@ pub fn discover_games() -> Result<Vec<Game>, SteamError> {
             .then(a.app_id.cmp(&b.app_id))
     });
 
-    Ok(games)
+    Ok(Discovery { games, warnings })
 }
 
 #[cfg(test)]
@@ -228,5 +253,14 @@ mod tests {
         assert!(!lib.ends_with("steamapps"));
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn discovery_defaults_to_no_games_and_no_warnings() {
+        // Documents the contract the GUI relies on: a `Discovery` is always safe
+        // to iterate (empty by default) and warnings are separate from games.
+        let discovery = Discovery::default();
+        assert!(discovery.games.is_empty());
+        assert!(discovery.warnings.is_empty());
     }
 }

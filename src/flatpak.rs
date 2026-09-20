@@ -57,6 +57,16 @@ fn detect() -> bool {
 /// document-portal alias), and when resolution fails — in which case the caller
 /// falls back to using the path verbatim. This makes the call safe to apply
 /// unconditionally to every launch argument when inside a sandbox.
+///
+/// # Threading
+///
+/// This performs a **blocking** subprocess call (`flatpak-spawn --host flatpak
+/// document-info`) and is invoked from [`crate::launcher::proton::run_in_prefix`],
+/// which runs on the GUI thread. Non-document paths return early without spawning
+/// anything, so only a launch whose argument is a document-portal alias pays the
+/// cost; that case can stall the UI for the duration of the host round-trip, and
+/// there is no timeout (std's `Command` has none). If this becomes noticeable,
+/// resolve the path on the worker thread used for launches instead.
 pub fn resolve_host_path(path: &str) -> Option<String> {
     if !is_doc_path(path) {
         return None;

@@ -195,10 +195,12 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
-/// Write `contents` to `path` atomically: write to a temporary sibling file and
-/// `rename` it into place. This avoids leaving a truncated/corrupt file behind if
-/// the process is killed (or the write fails) partway through, so a later load
-/// never sees a half-written JSON document.
+/// Write `contents` to `path` atomically: write to a temporary sibling file, flush it
+/// to disk, and `rename` it into place. This avoids leaving a truncated/corrupt file
+/// behind if the process is killed (or the write fails) partway through, so a later load
+/// never sees a half-written JSON document — and the `sync_all` ensures the *data* is
+/// durable before the rename publishes it, so a crash cannot leave the target pointing
+/// at an empty file.
 fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -210,7 +212,15 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
         std::process::id(),
         std::thread::current().id()
     ));
-    std::fs::write(&tmp, contents)?;
+    // Write, then flush to disk *before* renaming: without the `sync_all` the
+    // rename could be persisted ahead of the data on a crash, leaving an empty or
+    // truncated file behind — exactly the corruption the atomic rename avoids.
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+    }
     // Atomically replace the target; `rename` is atomic on POSIX when src and dst
     // share a filesystem (guaranteed here since the temp file is a sibling).
     match std::fs::rename(&tmp, path) {

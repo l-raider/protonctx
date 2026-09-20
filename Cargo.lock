@@ -350,10 +350,9 @@ dependencies = [
 
 [[package]]
 name = "protonctx"
-version = "1.2.0"
+version = "1.2.1"
 dependencies = [
  "cxx",
- "cxx-gen",
  "cxx-qt",
  "cxx-qt-build",
  "cxx-qt-lib",
