@@ -1300,7 +1300,10 @@ fn discovery_outcome(
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::component::{Root, table::ColumnSort};
+    use gpui_kit::component::{
+        Root,
+        table::{ColumnSort, TableDelegate as _},
+    };
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{
         AnyWindowHandle, AppContext as _, Focusable as _, Keystroke, TestAppContext, point, px,
@@ -2172,6 +2175,94 @@ mod tests {
             assert_eq!(theme.mode, ThemeMode::Dark);
             assert_eq!(theme.background, try_parse_color("#202326").unwrap());
             assert_eq!(theme.scrollbar_mode, ScrollbarMode::Always);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn header_click_toggles_two_state_sort(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        view.update(cx, |app, cx| {
+            app.table.update(cx, |table, _| {
+                let delegate = table.delegate_mut();
+                // Name-ascending discovery order matches the delegate's initial
+                // sort state (column 0, ascending), so no neutral start is needed.
+                delegate.set_rows(vec![
+                    GameRow::from_game(&test_game("Broforce", 274190)),
+                    GameRow::from_game(&test_game("Castle Crashers", 204360)),
+                ]);
+            });
+        });
+
+        let assert_sorted =
+            |cx: &mut TestAppContext, column: usize, sort: ColumnSort, ids: &[u32]| {
+                cx.update(|cx| {
+                    let table = view.read(cx).table.read(cx);
+                    let delegate = table.delegate();
+                    assert_eq!(delegate.sort_column, column);
+                    assert_eq!(delegate.sort_sort, sort);
+                    let actual: Vec<u32> = delegate.rows.iter().map(|row| row.app_id).collect();
+                    assert_eq!(actual, ids);
+                });
+            };
+
+        // Click 1: active column's header body centre -> Descending.
+        cx.update_window(main.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click(("col-header", 0usize), cx);
+        })
+        .unwrap();
+        assert_sorted(cx, 0, ColumnSort::Descending, &[204360, 274190]);
+
+        // Click 2: indicator area of the active column -> one click, one step.
+        cx.update_window(main.into(), |_, window, cx| {
+            let header = window.find(("col-header", 0usize));
+            let offset = point(header.bounds().size.width - px(10.), px(16.));
+            window.click_at(("col-header", 0usize), offset, cx);
+        })
+        .unwrap();
+        assert_sorted(cx, 0, ColumnSort::Ascending, &[274190, 204360]);
+
+        // Click 3: a newly clicked column starts ascending (Qt default).
+        cx.update_window(main.into(), |_, window, cx| {
+            window.click(("col-header", 1usize), cx);
+        })
+        .unwrap();
+        assert_sorted(cx, 1, ColumnSort::Ascending, &[204360, 274190]);
+
+        // Click 4: further clicks on the active column toggle direction.
+        cx.update_window(main.into(), |_, window, cx| {
+            window.click(("col-header", 1usize), cx);
+        })
+        .unwrap();
+        assert_sorted(cx, 1, ColumnSort::Descending, &[274190, 204360]);
+
+        // Click 5: returning to a column restarts ascending, not a stale toggle.
+        cx.update_window(main.into(), |_, window, cx| {
+            window.click(("col-header", 0usize), cx);
+        })
+        .unwrap();
+        assert_sorted(cx, 0, ColumnSort::Ascending, &[274190, 204360]);
+
+        // The app-level sort switch stays on, but no column advertises library
+        // sort metadata, so the tri-state icon/cycle stays disabled.
+        cx.update(|cx| {
+            let table = view.read(cx).table.read(cx);
+            assert!(table.sortable, "the app-level sort switch stays on");
+            for col_ix in 0..3 {
+                assert!(
+                    table.delegate().column(col_ix, cx).sort.is_none(),
+                    "no library sort metadata, so the tri-state icon/cycle is disabled"
+                );
+            }
         });
     }
 }

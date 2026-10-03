@@ -2,11 +2,13 @@
 //!
 //! Row conversion, display formatting, sorting, and identity lookup are pure
 //! functions unit-tested beside this module; [`GamesDelegate`] keeps the
-//! prototype's behaviour (sort state persists across refreshes, selection is
-//! restored by App ID across sorts, the context menu drives real actions).
+//! prototype's behaviour (sort state persists across refreshes, a whole-header
+//! click toggles ascending/descending with an app-rendered indicator, selection
+//! is restored by App ID across sorts, the context menu drives real actions).
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::{
-    ActiveTheme as _,
+    ActiveTheme as _, Icon,
     menu::{PopupMenu, PopupMenuItem},
     table::{Column, ColumnSort, TableDelegate, TableState},
 };
@@ -95,6 +97,18 @@ pub fn sort_games(rows: &mut [GameRow], column: usize, ascending: bool) {
     }
 }
 
+/// Next sort direction when the active column's header is clicked.
+///
+/// Two-state toggle, matching Qt's default header behavior
+/// (`Ascending <-> Descending`). `Default` maps to `Ascending` defensively;
+/// the live table never reports it.
+pub fn next_sort(current: ColumnSort) -> ColumnSort {
+    match current {
+        ColumnSort::Ascending => ColumnSort::Descending,
+        _ => ColumnSort::Ascending,
+    }
+}
+
 pub fn find_by_app_id(rows: &[GameRow], app_id: u32) -> Option<usize> {
     rows.iter().position(|row| row.app_id == app_id)
 }
@@ -155,6 +169,35 @@ impl GamesDelegate {
             .and_then(|row_ix| self.rows.get(row_ix))
             .map(|row| row.app_id);
     }
+
+    /// Header sort indicator: a solid arrow on the sorted column, an invisible
+    /// same-size placeholder elsewhere so centered text does not shift when the
+    /// sorted column changes.
+    fn sort_icon(&self, col_ix: usize, cx: &App) -> Stateful<Div> {
+        // The id is required for the hover/active tint state, not for input:
+        // no click listener here, so clicks bubble to the header handler.
+        let slot = div()
+            .id(("sort-icon", col_ix))
+            .p(px(2.))
+            .flex_shrink_0()
+            .rounded(cx.theme().radius / 2.);
+
+        if col_ix == self.sort_column {
+            let icon = match self.sort_sort {
+                ColumnSort::Descending => IconName::SortDescending,
+                _ => IconName::SortAscending,
+            };
+            slot.hover(|this| this.bg(cx.theme().tokens.secondary).opacity(7.))
+                .active(|this| this.bg(cx.theme().tokens.secondary_active).opacity(1.))
+                .child(
+                    Icon::new(icon)
+                        .size_3()
+                        .text_color(cx.theme().secondary_foreground),
+                )
+        } else {
+            slot.child(Icon::new(IconName::ChevronsUpDown).size_3().opacity(0.))
+        }
+    }
 }
 
 impl TableDelegate for GamesDelegate {
@@ -167,14 +210,9 @@ impl TableDelegate for GamesDelegate {
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        let sort = if col_ix == self.sort_column {
-            self.sort_sort
-        } else {
-            ColumnSort::Default
-        };
-
+        // Without `.sort(...)` the library's tri-state icon and its private
+        // `perform_sort` cycle never run; `render_th` owns the indicator.
         Column::new(COLUMN_KEYS[col_ix], COLUMN_NAMES[col_ix])
-            .sort(sort)
             .resizable(col_ix < 2)
             .movable(false)
             .selectable(false)
@@ -217,9 +255,43 @@ impl TableDelegate for GamesDelegate {
         &mut self,
         col_ix: usize,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        div().w_full().text_center().child(COLUMN_NAMES[col_ix])
+        div()
+            .id(("th", col_ix))
+            .flex_1()
+            .h_full()
+            .flex()
+            .items_center()
+            .on_click(cx.listener(
+                move |table: &mut TableState<GamesDelegate>, _: &ClickEvent, window, cx| {
+                    // Whole-header click, like Qt's QHeaderView. The indicator is a
+                    // child of this element and has no listener, so one click is one
+                    // sort regardless of where in the header it lands.
+                    if !table.sortable {
+                        return;
+                    }
+
+                    let next = {
+                        let delegate = table.delegate();
+                        if col_ix == delegate.sort_column {
+                            next_sort(delegate.sort_sort)
+                        } else {
+                            // A newly clicked column starts ascending (Qt default).
+                            ColumnSort::Ascending
+                        }
+                    };
+
+                    table.delegate_mut().perform_sort(col_ix, next, window, cx);
+                    // `refresh` keeps cached column metadata in sync; `notify` is
+                    // what repaints, so `render_th` re-reads the sort state.
+                    table.refresh(cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                },
+            ))
+            .child(div().flex_1().text_center().child(COLUMN_NAMES[col_ix]))
+            .child(self.sort_icon(col_ix, cx))
     }
 
     fn render_tr(
@@ -323,7 +395,9 @@ impl TableDelegate for GamesDelegate {
 
 #[cfg(test)]
 mod tests {
-    use super::{Game, GameRow, display_compat_tool, find_by_app_id, sort_games};
+    use super::{
+        ColumnSort, Game, GameRow, display_compat_tool, find_by_app_id, next_sort, sort_games,
+    };
 
     fn game(
         name: &str,
@@ -506,6 +580,13 @@ mod tests {
         let mut rows = case_insensitive_fixtures();
         sort_games(&mut rows, 9, true);
         assert_eq!(fixture_ids(&rows), vec![40, 20, 30, 10]);
+    }
+
+    #[test]
+    fn header_sort_toggles_between_ascending_and_descending() {
+        assert_eq!(next_sort(ColumnSort::Ascending), ColumnSort::Descending);
+        assert_eq!(next_sort(ColumnSort::Descending), ColumnSort::Ascending);
+        assert_eq!(next_sort(ColumnSort::Default), ColumnSort::Ascending);
     }
 
     #[test]
