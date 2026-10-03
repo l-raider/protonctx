@@ -99,10 +99,10 @@ fn scale_alpha(color: Rgba, factor: f32) -> Rgba {
 ///
 /// - track: the window fill, Breeze's groove colour;
 /// - thumb: the window text at [`SCROLLBAR_THUMB_ALPHA`] over the groove,
-///   Breeze's resting handle (light on Breeze Dark, dark on Breeze Light),
-///   reused for the pressed/drag state the Qt screenshot shows grey;
-/// - hover: the selection background, the accent the Qt reference shows
-///   while the handle is hovered;
+///   Breeze's resting handle (light on Breeze Dark, dark on Breeze Light);
+/// - hover and pressed/drag: the selection background, the accent the Qt
+///   reference shows while the handle is hovered, kept while the handle is
+///   dragged so the grab reads as active;
 /// - geometry: 16 px rail / 8 px handle / 20 px minimum, centred.
 fn normalize_resolved_scrollbar(resolved: &mut ResolvedTheme) {
     let thumb = scale_alpha(resolved.defaults.text_color, SCROLLBAR_THUMB_ALPHA);
@@ -112,7 +112,7 @@ fn normalize_resolved_scrollbar(resolved: &mut ResolvedTheme) {
     resolved.scrollbar.track_color = resolved.defaults.background_color;
     resolved.scrollbar.thumb_color = thumb;
     resolved.scrollbar.thumb_hover_color = resolved.defaults.selection_background;
-    resolved.scrollbar.thumb_active_color = Some(thumb);
+    resolved.scrollbar.thumb_active_color = Some(resolved.defaults.selection_background);
 }
 
 /// Applies the desktop theme once at startup. No-op off KDE and under GPUI's
@@ -460,7 +460,7 @@ mod tests {
             assert_eq!(g.min_thumb_length, px(20.));
             assert_eq!(g.track, try_parse_color("#EFF0F1").unwrap());
             assert_eq!(g.thumb, rgba_to_hsla(Rgba::new(0x23, 0x26, 0x29, 128)));
-            assert_eq!(g.thumb_active, g.thumb);
+            assert_eq!(g.thumb_active, g.thumb_hover);
             assert_eq!(g.thumb_hover, try_parse_color("#3DAEE9").unwrap());
 
             let theme = Theme::global(cx);
@@ -485,7 +485,7 @@ mod tests {
             assert_eq!(g.min_thumb_length, px(20.));
             assert_eq!(g.track, try_parse_color("#202326").unwrap());
             assert_eq!(g.thumb, rgba_to_hsla(Rgba::new(0xfc, 0xfc, 0xfc, 128)));
-            assert_eq!(g.thumb_active, g.thumb);
+            assert_eq!(g.thumb_active, g.thumb_hover);
             assert_eq!(g.thumb_hover, try_parse_color("#3DAEE9").unwrap());
 
             let theme = Theme::global(cx);
