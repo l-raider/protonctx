@@ -53,6 +53,15 @@ are rendered from `ui/icon/icon.svg` at build time, so `rsvg-convert`
 cargo run
 ```
 
+### Keyboard shortcuts
+
+| Chord | Action |
+|-------|--------|
+| `F5` | Refresh the game list |
+| `Ctrl+C` | Copy the selected log text |
+| `Ctrl+A` | Select the whole log |
+| `Ctrl+L` | Clear the log |
+
 ### Flatpak: write access for shader-cache deletion
 
 The Flatpak manifest deliberately grants **read-only** access to `$HOME`, which

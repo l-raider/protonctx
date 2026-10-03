@@ -70,20 +70,20 @@ pub fn display_compat_tool(game: &Game) -> String {
 ///
 /// Keys match the legacy model: names and tools compare case-insensitively, and
 /// app ids compare numerically (equivalent to Qt's zero-padded string key for a
-/// `u32`).
+/// `u32`). Keys are computed once per row (`sort_by_cached_key`), so the
+/// case-insensitive columns no longer allocate two strings per comparison; the
+/// sort stays stable, exactly like the previous comparator.
 pub fn sort_games(rows: &mut [GameRow], column: usize, ascending: bool) {
-    rows.sort_by(|a, b| {
-        let order = match column {
-            0 => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            1 => a.app_id.cmp(&b.app_id),
-            _ => a
-                .compat_tool
-                .to_lowercase()
-                .cmp(&b.compat_tool.to_lowercase()),
-        };
-
-        if ascending { order } else { order.reverse() }
-    });
+    match (column, ascending) {
+        (0, true) => rows.sort_by_cached_key(|row| row.name.to_lowercase()),
+        (0, false) => rows.sort_by_cached_key(|row| std::cmp::Reverse(row.name.to_lowercase())),
+        (1, true) => rows.sort_by_cached_key(|row| row.app_id),
+        (1, false) => rows.sort_by_cached_key(|row| std::cmp::Reverse(row.app_id)),
+        (_, true) => rows.sort_by_cached_key(|row| row.compat_tool.to_lowercase()),
+        (_, false) => {
+            rows.sort_by_cached_key(|row| std::cmp::Reverse(row.compat_tool.to_lowercase()))
+        }
+    }
 }
 
 pub fn find_by_app_id(rows: &[GameRow], app_id: u32) -> Option<usize> {
@@ -469,6 +469,51 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["GE-Proton10-34", "proton_experimental", "proton_hotfix"]
         );
+    }
+
+    /// Mixed-case names/tools and equal keys: the cached-key sort must match
+    /// the old comparator exactly, including stable tie order in both
+    /// directions.
+    fn case_insensitive_fixtures() -> Vec<GameRow> {
+        vec![
+            GameRow::from_game(&game("alpha", 30, "Proton-GE", "/lib", "")),
+            GameRow::from_game(&game("ALPHA", 10, "proton-ge", "/lib", "")),
+            GameRow::from_game(&game("beta", 40, "Proton", "/lib", "")),
+            GameRow::from_game(&game("Beta", 20, "proton", "/lib", "")),
+        ]
+    }
+
+    fn fixture_ids(rows: &[GameRow]) -> Vec<u32> {
+        rows.iter().map(|row| row.app_id).collect()
+    }
+
+    #[test]
+    fn sorts_case_insensitively_and_stably_with_cached_keys() {
+        // Name: "alpha"/"ALPHA" tie (original order), then "beta"/"Beta".
+        let mut rows = case_insensitive_fixtures();
+        sort_games(&mut rows, 0, true);
+        assert_eq!(fixture_ids(&rows), vec![30, 10, 40, 20]);
+        sort_games(&mut rows, 0, false);
+        assert_eq!(fixture_ids(&rows), vec![40, 20, 30, 10]);
+
+        // App ID: unique keys, no tie ambiguity.
+        let mut rows = case_insensitive_fixtures();
+        sort_games(&mut rows, 1, true);
+        assert_eq!(fixture_ids(&rows), vec![10, 20, 30, 40]);
+        sort_games(&mut rows, 1, false);
+        assert_eq!(fixture_ids(&rows), vec![40, 30, 20, 10]);
+
+        // Tool: "Proton"/"proton" tie, then "Proton-GE"/"proton-ge" tie.
+        let mut rows = case_insensitive_fixtures();
+        sort_games(&mut rows, 2, true);
+        assert_eq!(fixture_ids(&rows), vec![40, 20, 30, 10]);
+        sort_games(&mut rows, 2, false);
+        assert_eq!(fixture_ids(&rows), vec![30, 10, 40, 20]);
+
+        // Columns beyond the known three keep the compatibility-tool key.
+        let mut rows = case_insensitive_fixtures();
+        sort_games(&mut rows, 9, true);
+        assert_eq!(fixture_ids(&rows), vec![40, 20, 30, 10]);
     }
 
     #[test]

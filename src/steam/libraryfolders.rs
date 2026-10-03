@@ -46,7 +46,10 @@ pub fn library_folders(steam_root: &Path) -> Result<Vec<PathBuf>, SteamError> {
         };
         if let Some(path_str) = folder_obj.get("path").and_then(|v| v.as_str()) {
             let p = PathBuf::from(path_str);
-            if p.is_dir() {
+            // Only absolute, existing directories are libraries. A relative
+            // entry would resolve against the process CWD and could smuggle a
+            // path into the shader-cache delete guard.
+            if p.is_absolute() && p.is_dir() {
                 folders.push(p);
             }
         }
@@ -88,6 +91,10 @@ mod tests {
 			"730"		"12345"
 		}}
 	}}
+	"2"
+	{{
+		"path"		"relative/library"
+	}}
 }}"#,
             lib_a.display(),
             lib_b.display()
@@ -97,6 +104,7 @@ mod tests {
         std::fs::write(dir.join("config").join("libraryfolders.vdf"), vdf).unwrap();
 
         let folders = library_folders(&dir).unwrap();
+        // The relative entry ("2") is skipped: only absolute directories count.
         assert_eq!(folders.len(), 2);
         assert!(folders.contains(&lib_a));
         assert!(folders.contains(&lib_b));

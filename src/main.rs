@@ -38,7 +38,9 @@ fn main() {
             // wrong variant (P27).
             theme::init(cx);
 
-            cx.bind_keys([KeyBinding::new("f5", RefreshGames, None)]);
+            // Global action chords (F5 refresh, Ctrl-C/A/L log actions) are
+            // defined next to the view so tests dispatch the same bindings.
+            views::main_ui::bind_keys(cx);
 
             gpui_kit::open_window(
                 WindowOptions {

@@ -5,7 +5,12 @@
 //! `flatpak`). State/action handling follows the prototype: subscriptions are
 //! stored, async completions run through `update_in`, and handlers are chosen
 //! per the lessons' listener table.
+//!
+//! Discovery loads are serialized, not raced: [`ProtonctxApp::refresh_games`]
+//! refuses to start while `loading` is set, so two scans can never overlap and
+//! a completion never needs a stale-generation check.
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -46,12 +51,25 @@ const TOOL_BUTTONS: [(&str, &str, &str); 4] = [
     ("wine-configuration", "Wine Configuration", "winecfg"),
 ];
 
+/// Register the global key bindings for the app's actions.
+///
+/// Shared by `main` and tests so chord dispatch behaves identically in both.
+/// The Ctrl chords are not claimed by the focused log textarea: `ctrl-l` is
+/// unbound there, and while `ctrl-c`/`ctrl-a` have textarea-native bindings,
+/// those produce the same copy/select-all results as the actions.
+pub(crate) fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("f5", RefreshGames, None),
+        KeyBinding::new("ctrl-c", LogCopy, None),
+        KeyBinding::new("ctrl-a", LogSelectAll, None),
+        KeyBinding::new("ctrl-l", LogClear, None),
+    ]);
+}
+
 /// Events sent from the launch reader/watcher threads to the UI task.
 enum LaunchEvent {
     /// A captured stdout/stderr line, or a read error from one of the pipes.
-    /// Every line is logged regardless of which launch produced it, so the
-    /// generation is carried for symmetry with [`LaunchEvent::Exited`].
-    Line { _generation: u64, text: String },
+    Line { text: String },
     /// A launched process exited (or waiting on it failed).
     Exited {
         generation: u64,
@@ -70,9 +88,12 @@ pub struct ProtonctxApp {
     launch_running: bool,
     active_launches: usize,
     launch_generation: u64,
-    load_generation: u64,
+    browsing: bool,
     viewport_width: Option<Pixels>,
     focus_handle: FocusHandle,
+    /// Single-flight flag for [`schedule_frame`]: true while a next-frame
+    /// callback is already queued.
+    repaint_queued: Rc<Cell<bool>>,
     _subscriptions: Vec<Subscription>,
     _activation_subscription: Subscription,
     _refresh_task: Option<Task<()>>,
@@ -179,9 +200,10 @@ impl ProtonctxApp {
             launch_running: false,
             active_launches: 0,
             launch_generation: 0,
-            load_generation: 0,
+            browsing: false,
             viewport_width: None,
             focus_handle,
+            repaint_queued: Rc::new(Cell::new(false)),
             _subscriptions: vec![subscription],
             _activation_subscription: activation_subscription,
             _refresh_task: None,
@@ -268,10 +290,14 @@ impl ProtonctxApp {
         cx.notify();
         // Appends can arrive from background launch tasks; schedule the frame
         // explicitly (see `refresh_games` completion).
-        schedule_frame(window);
+        schedule_frame(window, &self.repaint_queued);
     }
 
     /// Re-run Steam discovery, preserving the table's current sort order.
+    ///
+    /// While a scan is in flight `loading` is set and further calls are
+    /// ignored (the Refresh button is disabled and F5 no-ops), so a completion
+    /// always belongs to the current load.
     pub(crate) fn refresh_games(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.loading {
             return;
@@ -287,16 +313,6 @@ impl ProtonctxApp {
             self.append_log("Flatpak environment detected", window, cx);
         }
 
-        self.load_generation = self.load_generation.wrapping_add(1);
-        let generation = self.load_generation;
-        let (sort_column, ascending) = {
-            let delegate = self.table.read(cx).delegate();
-            (
-                delegate.sort_column,
-                matches!(delegate.sort_sort, ColumnSort::Ascending),
-            )
-        };
-
         self._refresh_task = Some(cx.spawn_in(window, async move |this, cx| {
             // Discovery is an unbounded filesystem scan; run it on a
             // background task and await the result here (Qt ran the same scan
@@ -307,14 +323,17 @@ impl ProtonctxApp {
                 .await;
 
             let _ = this.update_in(cx, |this, window, cx| {
-                // A newer load superseded this one: discard the stale result.
-                // The newer load owns `loading`, so leave it set.
-                if !should_apply_load(generation, this.load_generation) {
-                    return;
-                }
                 this.loading = false;
 
-                let (rows, status, warnings) = discovery_outcome(result, sort_column, ascending);
+                // Resolve the sort state at completion time, not before the
+                // scan: a header click during the scan must win (L2), and
+                // `ColumnSort::Default` must leave discovery order intact (L1).
+                let (sort_column, sort_sort) = {
+                    let delegate = this.table.read(cx).delegate();
+                    (delegate.sort_column, delegate.sort_sort)
+                };
+
+                let (rows, status, warnings) = discovery_outcome(result, sort_column, sort_sort);
                 for warning in &warnings {
                     this.append_log(warning.clone(), window, cx);
                 }
@@ -329,7 +348,7 @@ impl ProtonctxApp {
                 });
                 this.status_text = status;
                 cx.notify();
-                schedule_frame(window);
+                schedule_frame(window, &this.repaint_queued);
             });
         }));
     }
@@ -433,6 +452,15 @@ impl ProtonctxApp {
     /// Pick a Windows executable through the XDG desktop portal and run it in
     /// the selected game's prefix.
     pub(crate) fn browse_for_executable(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The portal dialog is not application-modal, so the button/context
+        // menu can be activated again while the first request is pending.
+        // Replacing `_browse_task` would drop (and cancel) the in-flight
+        // request, so only one browse may be active at a time.
+        if self.browsing {
+            return;
+        }
+        self.browsing = true;
+
         // Seed the dialog at the last directory when the preference is on;
         // otherwise start at the portal default. The selection is re-resolved
         // after the dialog closes, as Qt does.
@@ -445,6 +473,10 @@ impl ProtonctxApp {
         self._browse_task = Some(cx.spawn_in(window, async move |this, cx| {
             let picked = prompt_for_exe(initial_dir).await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // Every completion path (picked, cancelled, failed) frees the
+                // next browse.
+                this.browsing = false;
+
                 match picked {
                     Ok(Some(path)) => {
                         // Remember the *directory* (not the file) for the next open.
@@ -468,7 +500,7 @@ impl ProtonctxApp {
                 }
                 // This completion runs outside the window dispatch, so ask
                 // for the frame explicitly.
-                schedule_frame(window);
+                schedule_frame(window, &this.repaint_queued);
             });
         }));
     }
@@ -510,17 +542,46 @@ impl ProtonctxApp {
         let mut child = proc.child;
 
         // Stream each captured pipe from its own thread (as Qt's `log_pipe`).
-        stream_pipe(stdout, generation, self.launch_tx.clone());
-        stream_pipe(stderr, generation, self.launch_tx.clone());
+        stream_pipe(stdout, self.launch_tx.clone());
+        stream_pipe(stderr, self.launch_tx.clone());
 
         let tx = self.launch_tx.clone();
-        let _ = std::thread::Builder::new()
+        let watcher_generation = generation;
+        let spawn_result = std::thread::Builder::new()
             .name("launch-watcher".to_string())
             .spawn(move || {
                 let result = child.wait();
                 let _ = tx.send_blocking(LaunchEvent::Exited { generation, result });
             });
+        if let Err(e) = spawn_result {
+            // The child is already running, but without the watcher it can
+            // never be reaped and `active_launches` would never decrement.
+            // Clear the launch state so `launch_running` cannot wedge.
+            self.handle_watcher_spawn_failure(e, watcher_generation, window, cx);
+        }
 
+        cx.notify();
+    }
+
+    /// Clear the launch bookkeeping when the exit-watcher thread could not be
+    /// spawned, and surface the failure in the log and status bar.
+    fn handle_watcher_spawn_failure(
+        &mut self,
+        error: std::io::Error,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_launches = self.active_launches.saturating_sub(1);
+        self.launch_running = self.active_launches > 0;
+
+        let message = format!("Launch error: failed to start watcher: {error}");
+        self.append_log(message.clone(), window, cx);
+        // A newer launch superseded this one for status-text purposes; do not
+        // clobber its message.
+        if generation == self.launch_generation {
+            self.status_text = message;
+        }
         cx.notify();
     }
 
@@ -531,7 +592,7 @@ impl ProtonctxApp {
         cx: &mut Context<Self>,
     ) {
         match event {
-            LaunchEvent::Line { text, .. } => {
+            LaunchEvent::Line { text } => {
                 self.append_log(text, window, cx);
             }
             LaunchEvent::Exited { generation, result } => {
@@ -982,8 +1043,20 @@ impl Render for ProtonctxApp {
 /// alone marks the view dirty without waking the platform's frame source.
 /// `on_next_frame` wakes that source, and its callback marks the window dirty
 /// before the requested frame is drawn.
-fn schedule_frame(window: &mut Window) {
-    window.on_next_frame(|window, _cx| window.refresh());
+///
+/// Scheduling is single-flight: while a callback is pending, further requests
+/// are coalesced into it. A stalled frame loop (occluded window, no platform
+/// waker) therefore holds at most one callback instead of one per log line.
+fn schedule_frame(window: &mut Window, repaint_queued: &Rc<Cell<bool>>) {
+    if repaint_queued.replace(true) {
+        return;
+    }
+
+    let repaint_queued = repaint_queued.clone();
+    window.on_next_frame(move |window, _cx| {
+        repaint_queued.set(false);
+        window.refresh();
+    });
 }
 
 /// Stream one captured pipe (stdout or stderr) of a launched child to the log.
@@ -992,7 +1065,6 @@ fn schedule_frame(window: &mut Window) {
 /// child closes the pipe) and forwards each line through `tx`.
 fn stream_pipe<R: std::io::Read + Send + 'static>(
     reader: Option<R>,
-    generation: u64,
     tx: async_channel::Sender<LaunchEvent>,
 ) {
     let Some(reader) = reader else {
@@ -1008,16 +1080,12 @@ fn stream_pipe<R: std::io::Read + Send + 'static>(
                     Ok(text) => text,
                     Err(e) => {
                         let _ = tx.send_blocking(LaunchEvent::Line {
-                            _generation: generation,
                             text: format!("read error: {e}"),
                         });
                         break;
                     }
                 };
-                let _ = tx.send_blocking(LaunchEvent::Line {
-                    _generation: generation,
-                    text,
-                });
+                let _ = tx.send_blocking(LaunchEvent::Line { text });
             }
         });
 }
@@ -1053,22 +1121,22 @@ async fn prompt_for_exe(initial_dir: Option<PathBuf>) -> ashpd::Result<Option<Pa
         .find_map(|uri| uri.to_file_path().ok()))
 }
 
-/// Whether a completion for `generation` still belongs to the newest load.
-fn should_apply_load(generation: u64, current: u64) -> bool {
-    generation == current
-}
-
 /// Map a discovery result to rows, status text, and log warnings, sorting the
-/// rows with the caller's captured sort state (Qt's `load_games` contract).
+/// rows with the caller's current sort state (Qt's `load_games` contract).
 fn discovery_outcome(
     result: Result<crate::steam::Discovery, crate::steam::SteamError>,
     sort_column: usize,
-    ascending: bool,
+    sort_sort: ColumnSort,
 ) -> (Vec<GameRow>, String, Vec<String>) {
     match result {
         Ok(discovery) => {
             let mut rows: Vec<GameRow> = discovery.games.iter().map(GameRow::from_game).collect();
-            sort_games(&mut rows, sort_column, ascending);
+            match sort_sort {
+                ColumnSort::Ascending => sort_games(&mut rows, sort_column, true),
+                ColumnSort::Descending => sort_games(&mut rows, sort_column, false),
+                // The neutral header state means "discovery order".
+                ColumnSort::Default => {}
+            }
 
             let count = rows.len();
             let status = match count {
@@ -1090,11 +1158,11 @@ fn discovery_outcome(
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::component::{Root, WindowExt as _};
+    use gpui_kit::component::{Root, WindowExt as _, table::ColumnSort};
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AppContext as _, TestAppContext, px, size};
+    use gpui_kit::{AppContext as _, Focusable as _, Keystroke, TestAppContext, px, size};
 
-    use super::{ProtonctxApp, TRIM_SLACK, discovery_outcome, should_apply_load};
+    use super::{ProtonctxApp, TRIM_SLACK, bind_keys, discovery_outcome, schedule_frame};
     use crate::models::Game;
 
     fn test_game(name: &str, app_id: u32) -> Game {
@@ -1108,14 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_load_generations_are_discarded() {
-        assert!(should_apply_load(2, 2));
-        assert!(!should_apply_load(1, 2));
-        assert!(!should_apply_load(3, 2));
-    }
-
-    #[test]
-    fn discovery_outcome_sorts_with_the_captured_state_and_maps_errors() {
+    fn discovery_outcome_sorts_with_the_current_state_and_maps_errors() {
         let discovery = crate::steam::Discovery {
             games: vec![
                 test_game("Castle Crashers", 204360),
@@ -1123,7 +1184,7 @@ mod tests {
             ],
             warnings: vec!["a warning".to_string()],
         };
-        let (rows, status, warnings) = discovery_outcome(Ok(discovery), 1, false);
+        let (rows, status, warnings) = discovery_outcome(Ok(discovery), 1, ColumnSort::Descending);
         assert_eq!(
             rows.iter().map(|row| row.app_id).collect::<Vec<_>>(),
             vec![274190, 204360]
@@ -1131,17 +1192,40 @@ mod tests {
         assert_eq!(status, "2 games loaded");
         assert_eq!(warnings, vec!["a warning".to_string()]);
 
-        let (rows, status, warnings) =
-            discovery_outcome(Err(crate::steam::SteamError::SteamNotFound), 0, true);
+        let (rows, status, warnings) = discovery_outcome(
+            Err(crate::steam::SteamError::SteamNotFound),
+            0,
+            ColumnSort::Ascending,
+        );
         assert!(rows.is_empty());
         assert_eq!(status, "Steam not found");
         assert!(warnings.is_empty());
 
         let error = crate::steam::SteamError::Parse("bad vdf".to_string());
-        let (rows, status, warnings) = discovery_outcome(Err(error), 0, true);
+        let (rows, status, warnings) = discovery_outcome(Err(error), 0, ColumnSort::Ascending);
         assert!(rows.is_empty());
         assert_eq!(status, "Failed to discover games: parse error: bad vdf");
         assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn discovery_outcome_leaves_rows_unsorted_for_default_sort() {
+        // `ColumnSort::Default` is the neutral header state: a refresh must
+        // preserve discovery order instead of implying a descending sort.
+        let discovery = crate::steam::Discovery {
+            games: vec![
+                test_game("Castle Crashers", 204360),
+                test_game("Broforce", 274190),
+            ],
+            warnings: Vec::new(),
+        };
+        let (rows, status, warnings) = discovery_outcome(Ok(discovery), 0, ColumnSort::Default);
+        assert_eq!(
+            rows.iter().map(|row| row.app_id).collect::<Vec<_>>(),
+            vec![204360, 274190]
+        );
+        assert_eq!(status, "2 games loaded");
+        assert!(warnings.is_empty());
     }
 
     #[gpui_kit::test]
@@ -1301,6 +1385,183 @@ mod tests {
             assert!(view.read(cx).log_text.is_empty());
             let log = view.read(cx).log.clone();
             assert!(log.read(cx).value().is_empty());
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn log_clear_keybinding_clears_the_log(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(bind_keys);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| {
+                app.append_log("seed line", window, cx);
+                // Focus the read-only log textarea: `ctrl-l` must reach the
+                // root action rather than being swallowed by the editor.
+                let focus = app.log.read(cx).focus_handle(cx);
+                focus.focus(window, cx);
+            });
+            window.render_frame(cx);
+            window.press("ctrl-l", cx);
+
+            assert!(view.read(cx).log_text.is_empty());
+            let log = view.read(cx).log.clone();
+            assert!(log.read(cx).value().is_empty());
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn log_select_all_keybinding_selects_the_log(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(bind_keys);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| {
+                app.append_log("seed line", window, cx);
+            });
+            // The root is focused, so the global `LogSelectAll` binding (not
+            // the textarea-native `ctrl-a`) handles the chord.
+            window.dispatch_keystroke(Keystroke::parse("ctrl-a").unwrap(), cx);
+
+            let selected = view.read(cx).log.read(cx).selected_value().to_string();
+            assert!(selected.contains("seed line"), "selection was {selected:?}");
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn log_copy_keybinding_copies_the_selection(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(bind_keys);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| {
+                app.append_log("seed line", window, cx);
+            });
+            // Select all through the action, then put focus back on the root so
+            // the global `LogCopy` binding (not the textarea-native copy)
+            // handles `ctrl-c`.
+            window.dispatch_keystroke(Keystroke::parse("ctrl-a").unwrap(), cx);
+            let root_focus = view.read(cx).focus_handle.clone();
+            root_focus.focus(window, cx);
+
+            window.dispatch_keystroke(Keystroke::parse("ctrl-c").unwrap(), cx);
+
+            let copied = cx.read_from_clipboard().and_then(|item| item.text());
+            assert!(
+                copied
+                    .as_deref()
+                    .is_some_and(|text| text.contains("seed line")),
+                "clipboard did not receive the selected log text: {copied:?}"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn schedule_frame_is_single_flight(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            // Drain anything queued during window construction.
+            let _ = window.simulate_next_frame(cx);
+
+            let queued = std::rc::Rc::new(std::cell::Cell::new(false));
+            schedule_frame(window, &queued);
+            schedule_frame(window, &queued);
+            assert!(queued.get(), "a callback should be pending");
+            // Two requests coalesce into exactly one queued callback...
+            assert_eq!(window.simulate_next_frame(cx), 1);
+            // ...whose delivery clears the flag.
+            assert!(!queued.get(), "delivery should clear the flag");
+
+            schedule_frame(window, &queued);
+            assert_eq!(window.simulate_next_frame(cx), 1);
+
+            // `append_log` goes through the same helper, so the flag is set and
+            // a delivered frame clears it.
+            view.update(cx, |app, cx| {
+                app.append_log("first", window, cx);
+                app.append_log("second", window, cx);
+                assert!(app.repaint_queued.get(), "the append did not queue a frame");
+            });
+            let _ = window.simulate_next_frame(cx);
+            assert!(
+                !view.read(cx).repaint_queued.get(),
+                "a delivered frame should clear the flag"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn watcher_spawn_failure_clears_launch_state(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| {
+                app.active_launches = 1;
+                app.launch_running = true;
+                app.launch_generation = 7;
+
+                app.handle_watcher_spawn_failure(
+                    std::io::Error::other("resource temporarily unavailable"),
+                    7,
+                    window,
+                    cx,
+                );
+
+                assert_eq!(app.active_launches, 0);
+                assert!(!app.launch_running);
+                assert!(app.status_text.contains("failed to start watcher"));
+                assert!(app.log_text.contains("failed to start watcher"));
+            });
         })
         .unwrap();
     }

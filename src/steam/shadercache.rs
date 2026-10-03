@@ -45,7 +45,8 @@ pub fn shader_cache_dir_for(library: &Path, app_id: u32) -> PathBuf {
 /// `steamapps/shadercache` directory. This prevents a malformed or hostile
 /// `library_path` from ever causing a recursive delete outside the expected
 /// tree: if the guard fails, the call returns an [`std::io::Error`] instead of
-/// touching the filesystem.
+/// touching the filesystem. Relative paths are rejected outright, so the
+/// derived path can never be resolved against the process CWD.
 ///
 /// The library path is canonicalized first so a symlinked library (which
 /// `libraryfolders.vdf` may list) resolves to the real directory Steam writes
@@ -78,8 +79,14 @@ pub fn delete_shader_cache(library: &Path, app_id: u32) -> std::io::Result<bool>
 /// Whether `dir` has the exact shape `<...>/steamapps/shadercache/<app_id>`.
 ///
 /// The check is structural (file names only, no filesystem access) so it also
-/// rejects a path that does not exist yet.
+/// rejects a path that does not exist yet. It is absolute-only: a relative
+/// `library_path` would otherwise match the shape while resolving against the
+/// process CWD, letting deletion escape the configured library.
 fn is_shader_cache_dir(dir: &Path, app_id: u32) -> bool {
+    if !dir.is_absolute() {
+        return false;
+    }
+
     let app = dir.file_name().and_then(|n| n.to_str());
     if app != Some(app_id.to_string().as_str()) {
         return false;
@@ -138,6 +145,25 @@ mod tests {
         ));
         // Root-relative path with too few components.
         assert!(!is_shader_cache_dir(Path::new("/274190"), 274190));
+    }
+
+    #[test]
+    fn guard_rejects_relative_paths() {
+        // A relative `library_path` would resolve against the process CWD and
+        // let a recursive delete escape the configured library.
+        assert!(!is_shader_cache_dir(
+            Path::new("steamapps/shadercache/274190"),
+            274190
+        ));
+        assert!(!is_shader_cache_dir(
+            Path::new("../../lib/steamapps/shadercache/274190"),
+            274190
+        ));
+
+        // `delete_shader_cache` derives the path itself, so a relative library
+        // is refused before any filesystem access.
+        let err = delete_shader_cache(Path::new("relative-lib"), 274190).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
