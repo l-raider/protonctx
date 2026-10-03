@@ -17,7 +17,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
-    ActiveTheme as _, Colorize as _, Disableable as _, Icon, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Colorize as _, Disableable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex,
     input::TextareaState,
@@ -35,7 +35,7 @@ use crate::games::{GameRow, GamesDelegate, TOOL_BUTTONS, sort_games};
 use crate::log;
 use crate::menu;
 use crate::models::Game;
-use crate::views::{about_ui, logs_ui, settings_ui};
+use crate::views::{about_ui, dialog_ui, logs_ui, settings_ui};
 use crate::{LogClear, LogCopy, LogSelectAll, RefreshGames};
 
 /// Cap for the log textarea; the oldest lines are trimmed first.
@@ -95,6 +95,10 @@ pub struct ProtonctxApp {
     _refresh_task: Option<Task<()>>,
     _launch_events_task: Option<Task<()>>,
     _browse_task: Option<Task<()>>,
+    _delete_cache_task: Option<Task<()>>,
+    /// True while the shader-cache deletion spawned by the confirm dialog is
+    /// in flight; the dialog rebuild reads it to disable its buttons.
+    deleting_shader_cache: bool,
     launch_tx: async_channel::Sender<LaunchEvent>,
     launch_rx: async_channel::Receiver<LaunchEvent>,
 }
@@ -205,6 +209,8 @@ impl ProtonctxApp {
             _refresh_task: None,
             _launch_events_task: None,
             _browse_task: None,
+            _delete_cache_task: None,
+            deleting_shader_cache: false,
             launch_tx,
             launch_rx,
         };
@@ -635,14 +641,13 @@ impl ProtonctxApp {
         window.open_dialog(cx, move |dialog, _window, cx| {
             dialog
                 .title("Launch Error")
-                .w(px(360.))
+                .w(dialog_ui::MESSAGE_DIALOG_WIDTH)
                 .child(
-                    h_flex()
-                        .w_full()
-                        .items_start()
-                        .gap_2()
-                        .child(Icon::new(IconName::CircleAlert).text_color(cx.theme().danger))
-                        .child(div().text_sm().child(message.clone())),
+                    div()
+                        .id("launch-error-message")
+                        .test_support()
+                        .debug_selector(|| "launch-error-message".into())
+                        .child(dialog_ui::dialog_alert_body(message.clone(), cx)),
                 )
                 .footer(
                     h_flex().w_full().justify_end().child(
@@ -706,20 +711,25 @@ impl ProtonctxApp {
             let Some(entity) = weak.upgrade() else {
                 return dialog;
             };
+            // The builder re-runs every frame, so the in-flight flag flips the
+            // dialog non-dismissible as soon as the deletion starts.
+            let deleting = entity.read(cx).deleting_shader_cache;
             let on_delete = window.listener_for(&entity, |app, _, window, cx| {
                 app.delete_shader_cache(window, cx);
             });
 
             dialog
                 .title("Delete Shader Cache")
-                .w(px(420.))
+                .w(dialog_ui::MESSAGE_DIALOG_WIDTH)
+                .keyboard(!deleting)
+                .overlay_closable(!deleting)
+                .close_button(!deleting)
                 .child(
-                    h_flex()
-                        .w_full()
-                        .items_start()
-                        .gap_2()
-                        .child(Icon::new(IconName::CircleAlert).text_color(cx.theme().danger))
-                        .child(div().text_sm().child(message.clone())),
+                    div()
+                        .id("delete-cache-message")
+                        .test_support()
+                        .debug_selector(|| "delete-cache-message".into())
+                        .child(dialog_ui::dialog_alert_body(message.clone(), cx)),
                 )
                 .footer(
                     h_flex()
@@ -730,12 +740,14 @@ impl ProtonctxApp {
                             Button::new("delete-cache-cancel")
                                 .outline()
                                 .label("Cancel")
+                                .disabled(deleting)
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
                             Button::new("delete-cache-confirm")
                                 .danger()
                                 .label("Delete")
+                                .disabled(deleting)
                                 .on_click(on_delete),
                         ),
                 )
@@ -743,43 +755,69 @@ impl ProtonctxApp {
     }
 
     /// Delete the selected game's shader cache and report the outcome exactly
-    /// as the legacy model did.
+    /// as the legacy model did. The recursive delete runs on a background task;
+    /// the confirm dialog stays open (non-dismissible) until every outcome is
+    /// known, then closes for all three of `Ok(true)`, `Ok(false)`, and `Err`.
     fn delete_shader_cache(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Single-flight: repeat clicks while a deletion is in flight are no-ops
+        // (the button is disabled, but a queued click can still land).
+        if self.deleting_shader_cache {
+            return;
+        }
         let Some(row) = self.selected_row_data(cx) else {
             self.show_launch_error("No game selected", window, cx);
             return;
         };
+        self.deleting_shader_cache = true;
+        // Rebuild the dialog with its buttons disabled before yielding.
+        cx.notify();
 
-        let library = std::path::Path::new(&row.library_path);
-        match crate::steam::shadercache::delete_shader_cache(library, row.app_id) {
-            Ok(true) => {
-                self.append_log(
-                    format!(
-                        "Deleted shader cache for {} (app id {})",
-                        row.name, row.app_id
-                    ),
-                    window,
-                    cx,
-                );
-                self.status_text = "Shader cache deleted".to_string();
+        self._delete_cache_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let library = PathBuf::from(&row.library_path);
+            let app_id = row.app_id;
+            let result = cx
+                .background_executor()
+                .spawn(
+                    async move { crate::steam::shadercache::delete_shader_cache(&library, app_id) },
+                )
+                .await;
+
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.deleting_shader_cache = false;
+                match result {
+                    Ok(true) => {
+                        this.append_log(
+                            format!("Deleted shader cache for {} (app id {})", row.name, app_id),
+                            window,
+                            cx,
+                        );
+                        this.status_text = "Shader cache deleted".to_string();
+                        window.close_dialog(cx);
+                    }
+                    Ok(false) => {
+                        this.append_log(
+                            format!("No shader cache found for {} (app id {})", row.name, app_id),
+                            window,
+                            cx,
+                        );
+                        this.status_text = "No shader cache to delete".to_string();
+                        window.close_dialog(cx);
+                    }
+                    Err(e) => {
+                        // Close the confirm first: `close_dialog` dismisses the
+                        // topmost dialog, so opening the error box first would
+                        // leave the confirm on top.
+                        window.close_dialog(cx);
+                        this.show_launch_error(
+                            format!("Failed to delete shader cache: {e}"),
+                            window,
+                            cx,
+                        );
+                    }
+                }
                 cx.notify();
-            }
-            Ok(false) => {
-                self.append_log(
-                    format!(
-                        "No shader cache found for {} (app id {})",
-                        row.name, row.app_id
-                    ),
-                    window,
-                    cx,
-                );
-                self.status_text = "No shader cache to delete".to_string();
-                cx.notify();
-            }
-            Err(e) => {
-                self.show_launch_error(format!("Failed to delete shader cache: {e}"), window, cx);
-            }
-        }
+            });
+        }));
     }
 
     fn sync_compat_width(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1188,6 +1226,7 @@ mod tests {
     use super::{
         ProtonctxApp, TRIM_SLACK, bind_keys, discovery_outcome, schedule_frame, trim_scroll_offset,
     };
+    use crate::games::GameRow;
     use crate::models::Game;
 
     fn test_game(name: &str, app_id: u32) -> Game {
@@ -1659,6 +1698,192 @@ mod tests {
             trim_scroll_offset(false, point(px(0.), px(-30.)), None, 50),
             point(px(0.), px(-30.))
         );
+    }
+
+    #[gpui_kit::test]
+    fn launch_error_dialog_wraps_long_messages(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        let long = "Failed to launch /home/user/.local/share/Steam/steamapps/common/\
+                    Proton - Experimental/files/bin/wine64 with a very long argument list"
+            .repeat(2);
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| {
+                app.show_launch_error(long.clone(), window, cx);
+            });
+            window.render_frame(cx);
+
+            let message = window.find("launch-error-message");
+            let bounds = message.bounds();
+            // A single line at the test rem is 20 px; anything taller means the
+            // text wrapped instead of keeping its intrinsic width.
+            assert!(
+                bounds.size.height > px(20.),
+                "long message did not wrap: {bounds:?}"
+            );
+            // The dialog body is 420 px minus the 16 px side paddings; a
+            // message wider than that would be clipped by `overflow_hidden`.
+            assert!(
+                bounds.size.width <= px(388.),
+                "message exceeded the dialog body width: {bounds:?}"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn delete_shader_cache_dialog_closes_after_deletion(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let root = std::env::temp_dir().join(format!(
+            "protonctx-test-delete-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let app_id = 274190;
+        let cache = crate::steam::shadercache::shader_cache_dir_for(&root, app_id);
+        std::fs::create_dir_all(cache.join("fozpipelinesv6")).unwrap();
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        let mut game = test_game("Cache Test", app_id);
+        game.library_path = root.to_string_lossy().into_owned();
+        view.update(cx, |app, cx| {
+            app.table.update(cx, |table, _| {
+                table
+                    .delegate_mut()
+                    .set_rows(vec![GameRow::from_game(&game)]);
+            });
+            app.selected_row = Some(0);
+        });
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| app.confirm_delete_shader_cache(window, cx));
+            window.render_frame(cx);
+            assert!(window.has_active_dialog(cx));
+            window.click("delete-cache-confirm", cx);
+        })
+        .unwrap();
+
+        // The recursive delete runs on the background executor; drive the tasks
+        // until the completion handler has run.
+        cx.run_until_parked();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            assert!(!window.has_active_dialog(cx), "confirm stayed open");
+            assert!(!view.read(cx).deleting_shader_cache);
+            assert_eq!(view.read(cx).status_text, "Shader cache deleted");
+            assert!(
+                view.read(cx)
+                    .log_text
+                    .contains("Deleted shader cache for Cache Test (app id 274190)"),
+                "log did not report the deletion: {}",
+                view.read(cx).log_text
+            );
+        })
+        .unwrap();
+
+        assert!(!cache.exists(), "cache directory survived the delete");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[gpui_kit::test]
+    fn delete_shader_cache_failure_closes_confirm_and_opens_error(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        // A relative library path is rejected by the shadercache guard, so the
+        // background deletion returns `Err` without touching the filesystem.
+        let mut game = test_game("Relative", 274190);
+        game.library_path = "relative-lib".to_string();
+        view.update(cx, |app, cx| {
+            app.table.update(cx, |table, _| {
+                table
+                    .delegate_mut()
+                    .set_rows(vec![GameRow::from_game(&game)]);
+            });
+            app.selected_row = Some(0);
+        });
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| app.confirm_delete_shader_cache(window, cx));
+            window.render_frame(cx);
+            window.click("delete-cache-confirm", cx);
+        })
+        .unwrap();
+
+        cx.run_until_parked();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            // The confirm closed first, then the error box opened on top.
+            assert!(window.has_active_dialog(cx), "error dialog did not open");
+            assert!(window.find("launch-error-close").visible());
+            assert!(
+                window.try_find("delete-cache-confirm").is_none(),
+                "confirm dialog is still on screen"
+            );
+            assert!(!view.read(cx).deleting_shader_cache);
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn delete_shader_cache_is_single_flight(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+
+            // Without a selection the guard falls through to the existing
+            // "No game selected" error box.
+            view.update(cx, |app, cx| app.delete_shader_cache(window, cx));
+            assert!(window.has_active_dialog(cx));
+            window.close_dialog(cx);
+
+            // While a deletion is in flight a second call is a no-op and must
+            // not spawn another task.
+            view.update(cx, |app, cx| {
+                app.deleting_shader_cache = true;
+                app.delete_shader_cache(window, cx);
+                assert!(app._delete_cache_task.is_none());
+                assert!(app.deleting_shader_cache);
+            });
+            assert!(!window.has_active_dialog(cx));
+        })
+        .unwrap();
     }
 
     #[gpui_kit::test]
