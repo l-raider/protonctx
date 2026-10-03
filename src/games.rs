@@ -188,7 +188,7 @@ impl GamesDelegate {
                 _ => IconName::SortAscending,
             };
             slot.hover(|this| this.bg(cx.theme().tokens.secondary).opacity(7.))
-                .active(|this| this.bg(cx.theme().tokens.secondary_active).opacity(1.))
+                .active(|this| this.bg(cx.theme().accent).opacity(1.))
                 .child(
                     Icon::new(icon)
                         .size_3()
