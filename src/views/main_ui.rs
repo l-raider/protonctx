@@ -17,7 +17,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
-    ActiveTheme as _, Colorize as _, Disableable as _, Icon, Sizable as _,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex,
     input::TextareaState,
@@ -923,7 +923,9 @@ impl ProtonctxApp {
         let ring = cx.theme().ring;
         let radius = cx.theme().radius;
         let input_bg = cx.theme().input_background();
-        let hover_bg = input.mix_oklab(cx.theme().transparent, 0.5);
+        // Qt/Breeze paints the pressed background with the same wash the
+        // context menu uses on hover (`MenuItemElement` → `theme.tokens.accent`).
+        let pressed_bg = cx.theme().tokens.accent.background;
         let fg = cx.theme().button_foreground;
         let disabled_fg = cx.theme().muted_foreground.opacity(0.5);
 
@@ -937,7 +939,8 @@ impl ProtonctxApp {
                 this.border_color(input)
                     .bg(input_bg)
                     .text_color(fg)
-                    .hover(move |style| style.border_color(primary).bg(hover_bg))
+                    .hover(move |style| style.border_color(primary))
+                    .active(move |style| style.bg(pressed_bg).border_color(primary))
                     .focus_visible(move |style| style.border_color(ring))
             })
             .when(!enabled, |this| {
