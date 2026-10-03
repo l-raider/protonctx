@@ -25,7 +25,7 @@ mkdir -p "$APPDIR/usr/bin" \
 install -m755 target/publicrelease/protonctx "$APPDIR/usr/bin/protonctx"
 install -m644 packaging/protonctx.desktop \
   "$APPDIR/usr/share/applications/protonctx.desktop"
-install -m644 ui/icon/icon.svg \
+install -m644 packaging/icons/hicolor/scalable/apps/protonctx.svg \
   "$APPDIR/usr/share/icons/hicolor/scalable/apps/protonctx.svg"
 
 # 3. Bundle the binary's shared-library dependencies and emit the AppImage.

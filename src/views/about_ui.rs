@@ -1,10 +1,12 @@
 //! The About dialog, opened from the toolbar menu.
 
-use gpui_kit::assets::IconName;
-use gpui_kit::component::{ActiveTheme as _, Icon, v_flex};
+use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::*;
 
-use crate::views::dialog_ui::{self, DialogAction, DialogActionKind, DialogContent, DialogSize};
+use crate::views::dialog_ui::{self, DialogAction, DialogActionKind, DialogContent};
+
+/// The app icon path registered by [`crate::assets::AppAssets`].
+const APP_ICON: &str = "icons/protonctx.png";
 
 /// Body of the About dialog; the template provides the window chrome.
 struct AboutContent;
@@ -18,8 +20,10 @@ impl DialogContent for AboutContent {
         "About protonctx".into()
     }
 
-    fn size(&self) -> DialogSize {
-        DialogSize::Form
+    /// Wide enough that the description stays a single line at the KDE 10 pt
+    /// rem used in production.
+    fn size(&self) -> Size<Pixels> {
+        size(px(400.), px(200.))
     }
 
     fn body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
@@ -28,17 +32,18 @@ impl DialogContent for AboutContent {
             .items_center()
             .justify_center()
             .gap_2()
-            .child(
-                Icon::new(IconName::Gamepad2)
-                    .size(px(64.))
-                    .text_color(cx.theme().primary),
-            )
+            // Raster rather than SVG: GPUI tints SVGs with one color, so the
+            // multicolor icon is rendered from the packaged PNG.
+            .child(img(APP_ICON).w(px(64.)).h(px(64.)).flex_shrink_0())
             .child(
                 dialog_ui::dialog_text(concat!("protonctx v", env!("CARGO_PKG_VERSION")))
                     .font_weight(FontWeight::SEMIBOLD),
             )
             .child(
                 dialog_ui::dialog_text("Launch executables inside a Steam game's Proton context.")
+                    .id("about-description")
+                    .test_support()
+                    .debug_selector(|| "about-description".into())
                     .w_full()
                     .text_center(),
             )

@@ -39,8 +39,9 @@ cargo build --release
 
 Debian and RPM packages are built with `cargo-deb` and `cargo-generate-rpm`
 (installed separately: `cargo install cargo-deb cargo-generate-rpm`). Icon PNGs
-are rendered from `ui/icon/icon.svg` at build time, so `rsvg-convert`
-(`librsvg2-tools`) or ImageMagick `convert` is also required.
+are rendered from `packaging/icons/hicolor/scalable/apps/protonctx.svg` at
+build time, so `rsvg-convert` (`librsvg2-tools`) or ImageMagick `convert` is
+also required.
 
 ```sh
 ./build-deb.sh    # -> target/debian/protonctx_*.deb
@@ -102,6 +103,7 @@ GNU GPL v3. See [LICENSE](LICENSE).
 
 ## Attribution
 
-The application icon (`ui/icon/icon.svg`) is "Game Development" by
-[Sooodesign](https://www.svgrepo.com/svg/426047/game-developement), licensed under
-[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+The application icon
+(`packaging/icons/hicolor/scalable/apps/protonctx.svg`) is "Game Development"
+by [Sooodesign](https://www.svgrepo.com/svg/426047/game-developement), licensed
+under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).

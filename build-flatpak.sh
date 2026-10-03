@@ -43,7 +43,7 @@ if [[ ! -d "$VENDOR_DIR" || Cargo.lock -nt "$VENDOR_DIR" ]]; then
 fi
 
 # ── Generate icon PNGs from SVG when the SVG is newer ────────────────────────
-SVG_ICON="ui/icon/icon.svg"
+SVG_ICON="packaging/icons/hicolor/scalable/apps/protonctx.svg"
 ICON_SENTINEL="flatpak/icons/hicolor/256x256/apps/io.github.l_raider.protonctx.png"
 if [[ ! -f "$ICON_SENTINEL" || "$SVG_ICON" -nt "$ICON_SENTINEL" ]]; then
     echo "Generating icon PNGs from SVG..."

@@ -24,26 +24,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::*;
 
-/// Fixed per-class dialog dimensions; no per-dialog px values.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DialogSize {
-    /// Short message boxes (Launch Error, Delete Shader Cache).
-    Message,
-    /// Single-control form dialogs (Settings).
-    Compact,
-    /// Full form dialogs (About).
-    Form,
-}
-
-impl DialogSize {
-    pub fn size(self) -> Size<Pixels> {
-        match self {
-            DialogSize::Message => size(px(420.), px(240.)),
-            DialogSize::Compact => size(px(360.), px(160.)),
-            DialogSize::Form => size(px(360.), px(260.)),
-        }
-    }
-}
+/// Default dialog dimensions (a short message box). Contents override
+/// [`DialogContent::size`] when they need different dimensions.
+pub const DEFAULT_DIALOG_SIZE: Size<Pixels> = size(px(420.), px(240.));
 
 /// Visual variant of a dialog action button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,7 +100,11 @@ pub trait DialogContent: 'static {
     /// Stable identity: one window per id, deduped by [`open_dialog`].
     fn id(&self) -> &'static str;
     fn title(&self) -> SharedString;
-    fn size(&self) -> DialogSize;
+    /// Window size; defaults to [`DEFAULT_DIALOG_SIZE`]. Override in the
+    /// content type when the dialog needs different dimensions.
+    fn size(&self) -> Size<Pixels> {
+        DEFAULT_DIALOG_SIZE
+    }
     fn body(&mut self, window: &mut Window, cx: &mut App) -> AnyElement;
     fn actions(&self, cx: &App) -> Vec<DialogAction>;
     /// Esc and the WM close button are ignored while this returns false.
@@ -390,7 +377,7 @@ pub fn open_dialog<C: DialogContent>(
         return Ok(DialogHandle { handle });
     }
 
-    let desired = content.size().size();
+    let desired = content.size();
     let visible = parent
         .display(cx)
         .map(|display| display.visible_bounds())
@@ -509,8 +496,8 @@ mod tests {
     };
 
     use super::{
-        DialogAction, DialogActionKind, DialogContent, DialogHandle, DialogOpenError, DialogSize,
-        dialog_bounds, open_dialog, window_for,
+        DEFAULT_DIALOG_SIZE, DialogAction, DialogActionKind, DialogContent, DialogHandle,
+        DialogOpenError, dialog_bounds, open_dialog, window_for,
     };
 
     struct ParentView;
@@ -546,10 +533,6 @@ mod tests {
 
         fn title(&self) -> SharedString {
             "Test Dialog".into()
-        }
-
-        fn size(&self) -> DialogSize {
-            DialogSize::Message
         }
 
         fn body(&mut self, _window: &mut Window, _cx: &mut App) -> AnyElement {
@@ -593,10 +576,10 @@ mod tests {
     }
 
     #[test]
-    fn dialog_size_values_are_fixed() {
-        assert_eq!(DialogSize::Message.size(), size(px(420.), px(240.)));
-        assert_eq!(DialogSize::Compact.size(), size(px(360.), px(160.)));
-        assert_eq!(DialogSize::Form.size(), size(px(360.), px(260.)));
+    fn content_without_override_uses_the_default_dialog_size() {
+        let content = TestContent::new("test", "default size");
+        assert_eq!(content.size(), DEFAULT_DIALOG_SIZE);
+        assert_eq!(DEFAULT_DIALOG_SIZE, size(px(420.), px(240.)));
     }
 
     #[test]

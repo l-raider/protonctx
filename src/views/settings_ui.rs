@@ -7,7 +7,7 @@
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::*;
 
-use crate::views::dialog_ui::{self, DialogAction, DialogActionKind, DialogContent, DialogSize};
+use crate::views::dialog_ui::{self, DialogAction, DialogActionKind, DialogContent};
 use crate::views::main_ui::ProtonctxApp;
 
 /// Body of the native Settings dialog; the template provides the window chrome.
@@ -32,8 +32,9 @@ impl DialogContent for SettingsContent {
         "Settings".into()
     }
 
-    fn size(&self) -> DialogSize {
-        DialogSize::Compact
+    /// A single checkbox: shorter than the template default message box.
+    fn size(&self) -> Size<Pixels> {
+        size(px(300.), px(100.))
     }
 
     fn body(&mut self, _window: &mut Window, _cx: &mut App) -> AnyElement {

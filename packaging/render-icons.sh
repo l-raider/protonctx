@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# Render PNG icons (16–256 px) from the single SVG source, plus install the
-# scalable SVG, into packaging/icons/hicolor for use by cargo-deb / cargo-generate-rpm.
+# Render PNG icons (16–256 px) from the scalable SVG master in
+# packaging/icons/hicolor for use by cargo-deb / cargo-generate-rpm.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-SVG="../ui/icon/icon.svg"
+SVG="icons/hicolor/scalable/apps/protonctx.svg"
 OUT="icons/hicolor"
-
-mkdir -p "$OUT/scalable/apps"
-cp "$SVG" "$OUT/scalable/apps/protonctx.svg"
 
 if command -v rsvg-convert >/dev/null 2>&1; then
     render() { rsvg-convert -w "$1" -h "$1" "$SVG" -o "$2"; }

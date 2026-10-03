@@ -5,10 +5,19 @@ use gpui_kit::{AssetSource, Result, SharedString};
 
 icon_assets!(ExtraIcons, [Gamepad2, LogOut, Eraser]);
 
+/// The packaged application icon, embedded from the packaging tree so the About
+/// dialog and the installers share one source of truth.
+const APP_ICON_PATH: &str = "icons/protonctx.png";
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == APP_ICON_PATH {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "../packaging/icons/hicolor/256x256/apps/protonctx.png"
+            ))));
+        }
         if let Some(bytes) = ExtraIcons.load(path)? {
             return Ok(Some(bytes));
         }
@@ -18,6 +27,9 @@ impl AssetSource for AppAssets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = ComponentAssets.list(path)?;
         paths.extend(ExtraIcons.list(path)?);
+        if APP_ICON_PATH.starts_with(path) {
+            paths.push(APP_ICON_PATH.into());
+        }
         paths.sort();
         paths.dedup();
         Ok(paths)
@@ -34,6 +46,7 @@ mod tests {
             "icons/gamepad-2.svg",
             "icons/log-out.svg",
             "icons/eraser.svg",
+            "icons/protonctx.png",
             "icons/menu.svg",
             "icons/refresh-cw.svg",
         ] {
@@ -52,6 +65,7 @@ mod tests {
             "icons/gamepad-2.svg",
             "icons/log-out.svg",
             "icons/eraser.svg",
+            "icons/protonctx.png",
             "icons/menu.svg",
         ] {
             assert!(

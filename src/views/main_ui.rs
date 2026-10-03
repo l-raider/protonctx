@@ -1027,10 +1027,6 @@ impl dialog_ui::DialogContent for LaunchErrorContent {
         "Launch Error".into()
     }
 
-    fn size(&self) -> dialog_ui::DialogSize {
-        dialog_ui::DialogSize::Message
-    }
-
     fn body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
         div()
             .id("launch-error-message")
@@ -1068,10 +1064,6 @@ impl dialog_ui::DialogContent for DeleteCacheContent {
 
     fn title(&self) -> SharedString {
         "Delete Shader Cache".into()
-    }
-
-    fn size(&self) -> dialog_ui::DialogSize {
-        dialog_ui::DialogSize::Message
     }
 
     fn body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
@@ -1397,7 +1389,14 @@ mod tests {
 
     #[gpui_kit::test]
     fn about_menu_item_opens_window(cx: &mut TestAppContext) {
+        use native_theme_gpui::AccessibilityPreferences;
+
         cx.update(gpui_kit::init);
+        // The description width check is only meaningful at the production KDE
+        // 10 pt rem; the bare kit theme leaves the 16 px test default in place.
+        cx.update(|cx| {
+            crate::system_theme::install_preset(&AccessibilityPreferences::default(), true, cx);
+        });
 
         let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
@@ -1422,6 +1421,12 @@ mod tests {
 
         cx.update_window(about, |_, window, cx| {
             window.render_frame(cx);
+            // A single line at the test rem is 20 px; taller means the Form
+            // width is too narrow for the description.
+            assert!(
+                window.find("about-description").bounds().size.height <= px(20.),
+                "About description wrapped to multiple lines"
+            );
             window.click("about-ok", cx);
         })
         .unwrap();
