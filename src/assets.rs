@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use gpui_kit::assets::{Assets as ComponentAssets, icon_assets};
 use gpui_kit::{AssetSource, Result, SharedString};
 
-icon_assets!(ExtraIcons, [Gamepad2, LogOut, Eraser]);
+icon_assets!(ExtraIcons, [Gamepad2, LogOut, Eraser, X]);
 
 /// The packaged application icon, embedded from the packaging tree so the About
 /// dialog and the installers share one source of truth.
@@ -46,6 +46,7 @@ mod tests {
             "icons/gamepad-2.svg",
             "icons/log-out.svg",
             "icons/eraser.svg",
+            "icons/x.svg",
             "icons/protonctx.png",
             "icons/menu.svg",
             "icons/refresh-cw.svg",
@@ -65,6 +66,7 @@ mod tests {
             "icons/gamepad-2.svg",
             "icons/log-out.svg",
             "icons/eraser.svg",
+            "icons/x.svg",
             "icons/protonctx.png",
             "icons/menu.svg",
         ] {

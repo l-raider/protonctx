@@ -41,9 +41,6 @@ impl DialogContent for AboutContent {
             )
             .child(
                 dialog_ui::dialog_text("Launch executables inside a Steam game's Proton context.")
-                    .id("about-description")
-                    .test_support()
-                    .debug_selector(|| "about-description".into())
                     .w_full()
                     .text_center(),
             )

@@ -17,7 +17,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
-    ActiveTheme as _, Colorize as _, Disableable as _, Sizable as _,
+    ActiveTheme as _, Colorize as _, Disableable as _, Icon, Sizable as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex,
     input::TextareaState,
@@ -1013,7 +1013,8 @@ impl ProtonctxApp {
     }
 }
 
-/// Body of the native Launch Error window.
+/// Body of the native Launch Error window, laid out like the Qt/Breeze message
+/// box: a large danger badge with the message text top-aligned beside it.
 struct LaunchErrorContent {
     message: String,
 }
@@ -1027,21 +1028,49 @@ impl dialog_ui::DialogContent for LaunchErrorContent {
         "Launch Error".into()
     }
 
+    /// Wide and short, matching the Qt message box proportions.
+    fn size(&self) -> Size<Pixels> {
+        size(px(500.), px(130.))
+    }
+
     fn body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
-        div()
-            .id("launch-error-message")
-            .test_support()
-            .debug_selector(|| "launch-error-message".into())
-            .child(dialog_ui::dialog_alert_body(self.message.clone(), cx))
+        h_flex()
+            .w_full()
+            .items_start()
+            .gap_5()
+            .child(error_badge(cx))
+            .child(
+                v_flex()
+                    .id("launch-error-message")
+                    .test_support()
+                    .debug_selector(|| "launch-error-message".into())
+                    .flex_1()
+                    .min_w_0()
+                    .child(dialog_ui::dialog_text(self.message.clone())),
+            )
             .into_any_element()
     }
 
     fn actions(&self, _cx: &App) -> Vec<dialog_ui::DialogAction> {
-        vec![dialog_ui::DialogAction::close(
-            "launch-error-close",
-            "Close",
-        )]
+        vec![dialog_ui::DialogAction::close("launch-error-close", "OK").icon(IconName::Check)]
     }
+}
+
+/// Filled danger circle with a white cross: the Qt message-box error icon,
+/// drawn from theme colors plus the lucide `X` glyph.
+fn error_badge(cx: &App) -> impl IntoElement {
+    div()
+        .id("launch-error-icon")
+        .test_support()
+        .debug_selector(|| "launch-error-icon".into())
+        .flex_shrink_0()
+        .size(px(56.))
+        .rounded_full()
+        .bg(cx.theme().danger)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(Icon::new(IconName::X).size(px(32.)).text_color(white()))
 }
 
 /// Body of the native Delete Shader Cache confirmation. Dismissal (Esc, WM
@@ -1421,11 +1450,13 @@ mod tests {
 
         cx.update_window(about, |_, window, cx| {
             window.render_frame(cx);
-            // A single line at the test rem is 20 px; taller means the Form
-            // width is too narrow for the description.
+            // Fixed px sizing keeps action buttons at Qt height even at the
+            // production rem, which is smaller than the test default.
+            let ok = window.find("about-ok").bounds();
+            assert_eq!(ok.size.height, px(32.), "action button is not Qt-height");
             assert!(
-                window.find("about-description").bounds().size.height <= px(20.),
-                "About description wrapped to multiple lines"
+                ok.size.width >= px(80.),
+                "action button is narrower than Qt's"
             );
             window.click("about-ok", cx);
         })
@@ -1891,6 +1922,18 @@ mod tests {
         let error = dialog_window("launch-error", cx);
         cx.update_window(error, |_, window, cx| {
             window.render_frame(cx);
+
+            // Qt-like geometry: 56 px danger badge, text column beside it, and
+            // a 32 px-high action button at least 80 px wide.
+            let icon = window.find("launch-error-icon").bounds();
+            assert_eq!(icon.size, size(px(56.), px(56.)), "icon is not Qt-sized");
+            let button = window.find("launch-error-close").bounds();
+            assert_eq!(button.size.height, px(32.), "button is not Qt-height");
+            assert!(
+                button.size.width >= px(80.),
+                "button is narrower than Qt's: {button:?}"
+            );
+
             let message = window.find("launch-error-message");
             let bounds = message.bounds();
             // A single line at the test rem is 20 px; anything taller means the
@@ -1899,10 +1942,10 @@ mod tests {
                 bounds.size.height > px(20.),
                 "long message did not wrap: {bounds:?}"
             );
-            // The dialog body is 420 px minus the 16 px side paddings; a
-            // message wider than that would be clipped.
+            // 500 px window minus the 16 px side paddings, the 56 px icon, and
+            // the 20 px gap; wider than that would be clipped.
             assert!(
-                bounds.size.width <= px(388.),
+                bounds.size.width <= px(396.),
                 "message exceeded the dialog body width: {bounds:?}"
             );
         })

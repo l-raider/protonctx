@@ -44,6 +44,7 @@ pub struct DialogAction {
     id: &'static str,
     label: SharedString,
     kind: DialogActionKind,
+    icon: Option<IconName>,
     enabled: bool,
     on_click: DialogClickHandler,
 }
@@ -55,6 +56,7 @@ impl DialogAction {
             id,
             label: label.into(),
             kind,
+            icon: None,
             enabled: true,
             on_click: Box::new(|_, window, _| window.remove_window()),
         }
@@ -63,6 +65,12 @@ impl DialogAction {
     /// An outline action that closes the dialog window (Cancel/Close).
     pub fn close(id: &'static str, label: impl Into<SharedString>) -> Self {
         Self::new(id, label, DialogActionKind::Outline)
+    }
+
+    /// Prefix the label with an icon.
+    pub fn icon(mut self, icon: IconName) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     pub fn on_click(mut self, f: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
@@ -80,16 +88,23 @@ impl DialogAction {
             id,
             label,
             kind,
+            icon,
             enabled,
             on_click,
         } = self;
-        let button = match kind {
+        let mut button = match kind {
             DialogActionKind::Primary => Button::new(id).primary(),
             DialogActionKind::Outline => Button::new(id).outline(),
             DialogActionKind::Danger => Button::new(id).danger(),
         };
+        if let Some(icon) = icon {
+            button = button.icon(icon);
+        }
+        // Fixed size (not rem-scaled) to match the Qt/Breeze button geometry.
         button
             .label(label)
+            .h(px(32.))
+            .min_w(px(80.))
             .disabled(!enabled)
             .on_click(move |event, window, cx| on_click(event, window, cx))
     }
