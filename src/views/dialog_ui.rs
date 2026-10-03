@@ -409,7 +409,9 @@ pub fn open_dialog<C: DialogContent>(
         }),
         kind: WindowKind::Dialog,
         window_decorations: Some(WindowDecorations::Server),
-        app_id: Some("protonctx".to_string()),
+        // Same identity as the main window: it must match the installed
+        // desktop file's basename so dialogs inherit the app icon.
+        app_id: Some(crate::flatpak::window_app_id()),
         ..Default::default()
     };
 

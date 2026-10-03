@@ -19,6 +19,7 @@
 //! Both are checked so a sandbox is still detected if one signal is absent on an
 //! unusual installation. Outside a sandbox neither is present.
 
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// Whether the process is running inside a Flatpak sandbox.
@@ -40,6 +41,84 @@ fn detect() -> bool {
     }
     // Fallback signal: `flatpak run` sets this to the app ID.
     std::env::var_os("FLATPAK_ID").is_some()
+}
+
+/// The application ID advertised to the display server for protonctx windows.
+///
+/// Wayland compositors match a window to its `.desktop` file by `app_id` and use
+/// the entry's `Icon=` for the titlebar and window menu. Advertising an identity
+/// with no matching desktop file makes KWin fall back to its generic "wayland"
+/// icon (see `XdgToplevelWindow::updateIcon()`), even when the icon is
+/// installed under a different name. The desktop entry that exists depends on
+/// how protonctx was installed:
+///
+/// - Inside a Flatpak sandbox `FLATPAK_ID` is authoritative; the exported entry
+///   is `io.github.l_raider.protonctx.desktop`.
+/// - Native packaging (deb/rpm/AppImage) installs `protonctx.desktop`.
+/// - A locally built binary on a host where only the Flatpak is installed finds
+///   just the reverse-DNS entry, so following it is what makes the titlebar
+///   icon resolve for `cargo build` runs too.
+///
+/// The first installed entry wins. If none is installed the native ID is used
+/// and the compositor shows its fallback icon, exactly as for any other
+/// application that has not been installed.
+pub fn window_app_id() -> String {
+    let flatpak_id = std::env::var("FLATPAK_ID").ok();
+    app_id_for(
+        running_in_flatpak(),
+        flatpak_id.as_deref(),
+        desktop_entry_installed,
+    )
+}
+
+/// Pure decision function behind [`window_app_id`], kept separate so the
+/// Flatpak/native/installed-entry mapping can be tested without touching the
+/// environment or the filesystem.
+fn app_id_for(
+    flatpak: bool,
+    flatpak_id: Option<&str>,
+    entry_installed: impl Fn(&str) -> bool,
+) -> String {
+    /// App ID used by the deb/rpm/AppImage packaging, matching
+    /// `packaging/protonctx.desktop`.
+    const NATIVE_APP_ID: &str = "protonctx";
+    /// App ID used by the Flatpak packaging and its exported desktop entry.
+    const FLATPAK_APP_ID: &str = "io.github.l_raider.protonctx";
+
+    if flatpak && let Some(id) = flatpak_id.filter(|id| !id.is_empty()) {
+        return id.to_string();
+    }
+
+    [NATIVE_APP_ID, FLATPAK_APP_ID]
+        .into_iter()
+        .find(|id| entry_installed(id))
+        .unwrap_or(NATIVE_APP_ID)
+        .to_string()
+}
+
+/// Whether `<data dir>/applications/<id>.desktop` exists in any XDG data
+/// directory. `XDG_DATA_HOME` and `XDG_DATA_DIRS` are honoured, including their
+/// spec defaults, and Flatpak's export directory is normally listed in
+/// `XDG_DATA_DIRS` on the host.
+fn desktop_entry_installed(id: &str) -> bool {
+    let file = format!("{id}.desktop");
+
+    let user_data = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+    if user_data.is_some_and(|dir| dir.join("applications").join(&file).is_file()) {
+        return true;
+    }
+
+    let data_dirs = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string());
+    data_dirs.split(':').any(|dir| {
+        let dir = PathBuf::from(dir);
+        dir.is_absolute() && dir.join("applications").join(&file).is_file()
+    })
 }
 
 /// Resolve a path returned by the file-chooser portal to its real host origin, so
@@ -138,5 +217,42 @@ mod tests {
         // Non-doc paths should pass through unchanged (return None) without
         // spawning any subprocess.
         assert_eq!(resolve_host_path("/home/user/trainer.exe"), None);
+    }
+
+    #[test]
+    fn app_id_uses_flatpak_id_inside_sandbox() {
+        // Inside a sandbox the desktop file is exported under the Flatpak app
+        // ID, so the window must advertise exactly that ID for the compositor
+        // to find the icon.
+        assert_eq!(
+            app_id_for(true, Some("io.github.l_raider.protonctx"), |_| false),
+            "io.github.l_raider.protonctx"
+        );
+    }
+
+    #[test]
+    fn app_id_prefers_the_native_entry() {
+        // With both entries installed (native package + Flatpak) the native
+        // binary keeps grouping with its own launcher.
+        assert_eq!(app_id_for(false, None, |_| true), "protonctx");
+    }
+
+    #[test]
+    fn app_id_follows_an_installed_flatpak_entry() {
+        // A locally built binary on a Flatpak host only finds the exported
+        // reverse-DNS entry; advertising it is what makes KWin resolve `Icon=`.
+        assert_eq!(
+            app_id_for(false, None, |id| id == "io.github.l_raider.protonctx"),
+            "io.github.l_raider.protonctx"
+        );
+    }
+
+    #[test]
+    fn app_id_falls_back_to_native_id() {
+        // No entry installed (or missing/empty FLATPAK_ID): use the native ID;
+        // the compositor shows its fallback icon, as for any uninstalled app.
+        assert_eq!(app_id_for(false, None, |_| false), "protonctx");
+        assert_eq!(app_id_for(true, None, |_| false), "protonctx");
+        assert_eq!(app_id_for(true, Some(""), |_| false), "protonctx");
     }
 }

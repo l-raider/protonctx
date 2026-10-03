@@ -46,7 +46,11 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::centered(size(px(760.), px(520.)), cx)),
                     window_min_size: Some(size(px(468.), px(288.))),
-                    app_id: Some("protonctx".to_string()),
+                    // Must match the installed desktop file's basename so the
+                    // compositor can resolve the window/titlebar icon. Natively
+                    // that is `protonctx.desktop`; inside Flatpak it is
+                    // `io.github.l_raider.protonctx.desktop`.
+                    app_id: Some(flatpak::window_app_id()),
                     titlebar: Some(TitlebarOptions {
                         title: Some(format!("protonctx v{}", env!("CARGO_PKG_VERSION")).into()),
                         ..Default::default()
