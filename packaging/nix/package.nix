@@ -14,11 +14,13 @@
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "protonctx";
-  version = "1.2.1";
+  version = "1.2.2";
 
   src = fetchFromGitHub {
     owner = "l-raider";
     repo = "protonctx";
+    # Tag the release that contains the GPUI port so this cannot resolve to the
+    # pre-port v1.2.1 Qt tree.
     rev = "v${finalAttrs.version}";
     # Update on each release: run `nix-prefetch-github l-raider protonctx --rev v${version}`
     # and paste the resulting hash here.

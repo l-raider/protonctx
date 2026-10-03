@@ -31,7 +31,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::games::{GameRow, GamesDelegate, sort_games};
+use crate::games::{GameRow, GamesDelegate, TOOL_BUTTONS, sort_games};
 use crate::log;
 use crate::menu;
 use crate::models::Game;
@@ -42,14 +42,10 @@ use crate::{LogClear, LogCopy, LogSelectAll, RefreshGames};
 pub const MAX_LOG_LINES: usize = 500;
 /// Extra lines allowed before a trim runs, so trimming is not per-line work.
 pub const TRIM_SLACK: usize = 50;
-
-/// Action-row buttons: `(button id, label, tool id passed to the launcher)`.
-const TOOL_BUTTONS: [(&str, &str, &str); 4] = [
-    ("explorer", "Explorer", "explorer"),
-    ("registry-editor", "Registry Editor", "regedit"),
-    ("task-manager", "Task Manager", "taskmgr"),
-    ("wine-configuration", "Wine Configuration", "winecfg"),
-];
+/// Backpressure cap for launch output events. The reader threads block when
+/// the queue is full, which backpressures the child's pipe; without a bound, a
+/// chatty process (or a stalled UI consumer) would grow the queue forever.
+const LAUNCH_EVENT_CAPACITY: usize = 1024;
 
 /// Register the global key bindings for the app's actions.
 ///
@@ -187,7 +183,7 @@ impl ProtonctxApp {
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
 
-        let (launch_tx, launch_rx) = async_channel::unbounded();
+        let (launch_tx, launch_rx) = async_channel::bounded(LAUNCH_EVENT_CAPACITY);
 
         let mut app = Self {
             table,
@@ -284,6 +280,12 @@ impl ProtonctxApp {
             self.log_text = tail.clone();
             self.log.update(cx, |state, cx| {
                 state.set_value(tail, window, cx);
+                // `set_value` resets the viewport to the start; re-apply an
+                // explicit offset so the pane keeps following (or keeps the
+                // user's position).
+                let offset =
+                    trim_scroll_offset(at_bottom, prior_scroll, state.line_height(), keep_from);
+                state.set_scroll_offset(offset, cx);
             });
         }
 
@@ -1059,6 +1061,27 @@ fn schedule_frame(window: &mut Window, repaint_queued: &Rc<Cell<bool>>) {
     });
 }
 
+/// Scroll offset to apply after a log trim.
+///
+/// `set_value` resets the viewport to the start, so the caller re-applies an
+/// explicit offset: a following pane is sent to the tail (the [`f32::MAX`]
+/// sentinel is clamped to the maximum on paint), and a scrolled-up pane keeps
+/// its position, shifted up by the removed lines and clamped at the top. With
+/// no layout yet there is no line height, so the prior offset is kept.
+fn trim_scroll_offset(
+    at_bottom: bool,
+    prior_scroll: Point<Pixels>,
+    line_height: Option<Pixels>,
+    removed_lines: usize,
+) -> Point<Pixels> {
+    if at_bottom {
+        point(px(0.), px(f32::MAX))
+    } else {
+        let removed = line_height.map_or(px(0.), |line_height| line_height * removed_lines as f32);
+        point(prior_scroll.x, (prior_scroll.y + removed).min(px(0.)))
+    }
+}
+
 /// Stream one captured pipe (stdout or stderr) of a launched child to the log.
 ///
 /// Runs on its own thread: reads `reader` line-by-line (blocking until the
@@ -1160,9 +1183,11 @@ fn discovery_outcome(
 mod tests {
     use gpui_kit::component::{Root, WindowExt as _, table::ColumnSort};
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AppContext as _, Focusable as _, Keystroke, TestAppContext, px, size};
+    use gpui_kit::{AppContext as _, Focusable as _, Keystroke, TestAppContext, point, px, size};
 
-    use super::{ProtonctxApp, TRIM_SLACK, bind_keys, discovery_outcome, schedule_frame};
+    use super::{
+        ProtonctxApp, TRIM_SLACK, bind_keys, discovery_outcome, schedule_frame, trim_scroll_offset,
+    };
     use crate::models::Game;
 
     fn test_game(name: &str, app_id: u32) -> Game {
@@ -1606,6 +1631,34 @@ mod tests {
             );
         })
         .unwrap();
+    }
+
+    #[test]
+    fn trim_scroll_offset_follows_or_preserves_the_viewport() {
+        // Following: the sentinel is clamped to the tail on paint.
+        assert_eq!(
+            trim_scroll_offset(true, point(px(0.), px(-100.)), Some(px(20.)), 50),
+            point(px(0.), px(f32::MAX))
+        );
+
+        // Scrolled up: shift up by the removed lines so the same content
+        // stays in view.
+        assert_eq!(
+            trim_scroll_offset(false, point(px(0.), px(-1020.)), Some(px(20.)), 50),
+            point(px(0.), px(-20.))
+        );
+
+        // The shift cannot push the view above the retained text.
+        assert_eq!(
+            trim_scroll_offset(false, point(px(0.), px(-30.)), Some(px(20.)), 50),
+            point(px(0.), px(0.))
+        );
+
+        // Before the first layout there is no line height; keep the offset.
+        assert_eq!(
+            trim_scroll_offset(false, point(px(0.), px(-30.)), None, 50),
+            point(px(0.), px(-30.))
+        );
     }
 
     #[gpui_kit::test]

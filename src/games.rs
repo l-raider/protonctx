@@ -19,6 +19,15 @@ use crate::views::main_ui::ProtonctxApp;
 pub const COLUMN_KEYS: [&str; 3] = ["name", "app_id", "compat_tool"];
 pub const COLUMN_NAMES: [&str; 3] = ["Game", "App ID", "Compatibility Tool"];
 
+/// Built-in Wine tools shared by the action row and the row context menu:
+/// `(button id, label, tool id passed to the launcher)`.
+pub const TOOL_BUTTONS: [(&str, &str, &str); 4] = [
+    ("explorer", "Explorer", "explorer"),
+    ("registry-editor", "Registry Editor", "regedit"),
+    ("task-manager", "Task Manager", "taskmgr"),
+    ("wine-configuration", "Wine Configuration", "winecfg"),
+];
+
 /// A row shown in the games table, built from a discovered [`Game`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameRow {
@@ -267,65 +276,48 @@ impl TableDelegate for GamesDelegate {
             .exists()
         });
 
-        menu.item(app_menu_item(
-            window,
-            &entity,
-            "Browse for executable...",
-            |app, window, cx| app.browse_for_executable(window, cx),
-        ))
-        .separator()
-        .item(app_menu_item(
-            window,
-            &entity,
-            "Explorer",
-            |app, window, cx| {
-                app.launch_tool("explorer", window, cx);
-            },
-        ))
-        .item(app_menu_item(
-            window,
-            &entity,
-            "Registry Editor",
-            |app, window, cx| {
-                app.launch_tool("regedit", window, cx);
-            },
-        ))
-        .item(app_menu_item(
-            window,
-            &entity,
-            "Task Manager",
-            |app, window, cx| {
-                app.launch_tool("taskmgr", window, cx);
-            },
-        ))
-        .item(app_menu_item(
-            window,
-            &entity,
-            "Wine Configuration",
-            |app, window, cx| {
-                app.launch_tool("winecfg", window, cx);
-            },
-        ))
-        .separator()
-        .item(app_menu_item(
-            window,
-            &entity,
-            "Copy compatdata path",
-            |app, _, cx| app.copy_compat_data_path(cx),
-        ))
-        .item(app_menu_item(
-            window,
-            &entity,
-            "Copy compatibility tool path",
-            |app, _, cx| app.copy_compatibility_tool_path(cx),
-        ))
-        .separator()
-        .item(
-            app_menu_item(window, &entity, "Delete Shader Cache", |app, window, cx| {
-                app.confirm_delete_shader_cache(window, cx)
-            })
-            .disabled(!cache_exists),
-        )
+        let mut menu = menu
+            .item(app_menu_item(
+                window,
+                &entity,
+                "Browse for executable...",
+                |app, window, cx| app.browse_for_executable(window, cx),
+            ))
+            .separator();
+
+        // Build the tool items from the shared table so the toolbar and this
+        // menu cannot drift apart.
+        for (_, label, tool) in TOOL_BUTTONS {
+            menu = menu.item(app_menu_item(
+                window,
+                &entity,
+                label,
+                move |app, window, cx| {
+                    app.launch_tool(tool, window, cx);
+                },
+            ));
+        }
+
+        menu.separator()
+            .item(app_menu_item(
+                window,
+                &entity,
+                "Copy compatdata path",
+                |app, _, cx| app.copy_compat_data_path(cx),
+            ))
+            .item(app_menu_item(
+                window,
+                &entity,
+                "Copy compatibility tool path",
+                |app, _, cx| app.copy_compatibility_tool_path(cx),
+            ))
+            .separator()
+            .item(
+                app_menu_item(window, &entity, "Delete Shader Cache", |app, window, cx| {
+                    app.confirm_delete_shader_cache(window, cx)
+                })
+                .disabled(!cache_exists),
+            )
     }
 }
 
