@@ -3,5 +3,5 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-cargo build --release
+cargo build --profile publicrelease
 echo "build done..."
