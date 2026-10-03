@@ -26,10 +26,20 @@ serde_json = "1"
 [dev-dependencies]
 gpui-kit = { version = "0.7.0", features = ["test-support"] }
 
-[profile.release]
-lto = true
+[profile.publicrelease]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
 strip = true
 codegen-units = 1
+debug = false
+incremental = false
+panic = "abort"
+
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = "none"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
