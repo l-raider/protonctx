@@ -5,7 +5,9 @@
 //! both the light and dark variants, so gpui-component's `Theme::change`
 //! switches between native palettes with no custom detection. The theme is
 //! read once at startup; live scheme changes are out of scope. Off KDE, and
-//! under GPUI's test scheduler, this is a no-op.
+//! under GPUI's test scheduler, this is a no-op. Before install, the resolved
+//! variants also have their scrollbar model re-derived from the palette, so
+//! gpui-base paints the Qt/Breeze track and handle in every state.
 
 use std::sync::mpsc;
 use std::time::Duration;
@@ -13,7 +15,10 @@ use std::time::Duration;
 use gpui_kit::component::{Theme, scroll::ScrollbarMode};
 use gpui_kit::*;
 use native_theme::theme::{FontSize, ResolvedFontSpec, ResolvedTheme};
-use native_theme_gpui::{AccessibilityPreferences, SystemTheme, apply_system_theme, from_preset};
+use native_theme_gpui::{
+    AccessibilityPreferences, NativeTheme, Rgba, SystemTheme, apply_system_theme, base_layer,
+    from_preset,
+};
 
 /// Breeze preset installed when the platform reader fails.
 const FALLBACK_PRESET: &str = "kde-breeze";
@@ -60,6 +65,56 @@ fn normalize_resolved_fonts(resolved: &mut ResolvedTheme) {
     resolved.defaults.mono_font.size = font_size_at_base_dpi(&resolved.defaults.mono_font);
 }
 
+/// Breeze scrollbar metrics (`kstyle/breezemetrics.h`): the groove is
+/// `ScrollBar_Extend`, the handle `ScrollBar_SliderWidth` with
+/// `ScrollBar_MinSliderHeight` as the minimum length.
+///
+/// gpui-base gives every scrollbar a fixed 16 px overlay rail
+/// (`Scrollbar::width()`), so the groove is pinned to that rail instead of
+/// Breeze's 21 px: a wider groove is clipped and its hitbox swallows content
+/// clicks. The Breeze handle width is kept and the connector's centring
+/// derivation gives it 4 px on both sides.
+const SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
+const SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
+const SCROLLBAR_MIN_THUMB_LENGTH: f32 = 20.0;
+
+/// Breeze paints the resting handle as `QPalette::WindowText` at 50 % over
+/// the window fill (`scrollBarHandleColor` / `renderScrollBarHandle`); the
+/// alpha is kept so gpui-base composites it over the groove as Qt does.
+const SCROLLBAR_THUMB_ALPHA: f32 = 0.5;
+
+/// `color` with its alpha scaled by `factor`, RGB untouched.
+fn scale_alpha(color: Rgba, factor: f32) -> Rgba {
+    Rgba::new(
+        color.r,
+        color.g,
+        color.b,
+        (f32::from(color.a) * factor).round() as u8,
+    )
+}
+
+/// Re-derives the scrollbar model from the resolved KDE palette so every
+/// gpui-base scrollbar — games table, log pane, dialogs, lists, menus —
+/// paints the Qt/Breeze track and handle in all states:
+///
+/// - track: the window fill, Breeze's groove colour;
+/// - thumb: the window text at [`SCROLLBAR_THUMB_ALPHA`] over the groove,
+///   Breeze's resting handle (light on Breeze Dark, dark on Breeze Light),
+///   reused for the pressed/drag state the Qt screenshot shows grey;
+/// - hover: the selection background, the accent the Qt reference shows
+///   while the handle is hovered;
+/// - geometry: 16 px rail / 8 px handle / 20 px minimum, centred.
+fn normalize_resolved_scrollbar(resolved: &mut ResolvedTheme) {
+    let thumb = scale_alpha(resolved.defaults.text_color, SCROLLBAR_THUMB_ALPHA);
+    resolved.scrollbar.groove_width = SCROLLBAR_RAIL_WIDTH;
+    resolved.scrollbar.thumb_width = SCROLLBAR_THUMB_WIDTH;
+    resolved.scrollbar.min_thumb_length = SCROLLBAR_MIN_THUMB_LENGTH;
+    resolved.scrollbar.track_color = resolved.defaults.background_color;
+    resolved.scrollbar.thumb_color = thumb;
+    resolved.scrollbar.thumb_hover_color = resolved.defaults.selection_background;
+    resolved.scrollbar.thumb_active_color = Some(thumb);
+}
+
 /// Applies the desktop theme once at startup. No-op off KDE and under GPUI's
 /// test scheduler, which must stay deterministic.
 pub(crate) fn init(cx: &mut App) {
@@ -71,6 +126,8 @@ pub(crate) fn init(cx: &mut App) {
         Ok(mut system) => {
             normalize_resolved_fonts(&mut system.light);
             normalize_resolved_fonts(&mut system.dark);
+            normalize_resolved_scrollbar(&mut system.light);
+            normalize_resolved_scrollbar(&mut system.dark);
             apply_system_theme(&system, cx);
         }
         Err(error) => {
@@ -97,6 +154,7 @@ pub(crate) fn init(cx: &mut App) {
     // scheme and would hide them in overlay mode.
     Theme::set_scrollbar_mode(ScrollbarMode::Always, cx);
     restore_breeze_traits(cx);
+    install_scrollbar_styles(cx);
 }
 
 /// Reads the system theme on a worker thread and waits at most
@@ -141,6 +199,7 @@ pub(crate) fn install_preset(prefs: &AccessibilityPreferences, is_dark: bool, cx
             // resolution; rebuild it from the normalized variant so the flat
             // theme, its `ThemeConfig`, and the stored variant agree.
             normalize_resolved_fonts(&mut resolved);
+            normalize_resolved_scrollbar(&mut resolved);
             let name = theme.theme_name().clone();
             let theme = native_theme_gpui::to_theme(&resolved, &name, is_dark, prefs);
             native_theme_gpui::apply(theme, &resolved, prefs, cx);
@@ -149,6 +208,30 @@ pub(crate) fn install_preset(prefs: &AccessibilityPreferences, is_dark: bool, cx
             eprintln!("protonctx: the {FALLBACK_PRESET} preset failed to resolve ({error})")
         }
     }
+}
+
+/// Pins the scrollbar styles on gpui-base after the styled theme is
+/// installed.
+///
+/// The connector already projects these values, but a gpui-component rebuild
+/// can land after that projection, so the first frame is written here from
+/// the same normalised variant the connector stores. Both writers therefore
+/// agree; no extra observer (and no observer ping-pong) is needed because the
+/// application never rebuilds the theme at runtime.
+pub(crate) fn install_scrollbar_styles(cx: &mut App) {
+    let Some((geometry, resizable)) = cx
+        .try_global::<NativeTheme>()
+        .and_then(|native| native.resolved(cx))
+        .map(|resolved| {
+            (
+                base_layer::scrollbar_geometry(resolved),
+                base_layer::resizable_theme(resolved),
+            )
+        })
+    else {
+        return;
+    };
+    base_layer::apply_overrides(&geometry, resizable, cx);
 }
 
 /// Re-asserts Breeze's focus, panel, accent and selection treatment over a
@@ -237,11 +320,22 @@ mod tests {
     use gpui_kit::component::{Theme, ThemeMode, try_parse_color};
     use gpui_kit::{TestAppContext, px};
     use native_theme::theme::{FontSize, FontStyle, ResolvedFontSpec};
+    use native_theme_gpui::{NativeTheme, Rgba, base_layer};
 
     use super::{
-        AccessibilityPreferences, font_size_at_base_dpi, install_preset, is_kde, is_test_scheduler,
-        normalize_resolved_fonts, restore_breeze_traits,
+        AccessibilityPreferences, font_size_at_base_dpi, install_preset, install_scrollbar_styles,
+        is_kde, is_test_scheduler, normalize_resolved_fonts, restore_breeze_traits, rgba_to_hsla,
     };
+
+    /// The installed variant's scrollbar geometry through the connector's
+    /// public API; the styled `ScrollbarStyles` themselves are opaque.
+    fn installed_scrollbar(cx: &gpui_kit::App) -> base_layer::ScrollbarGeometry {
+        let resolved = cx
+            .global::<NativeTheme>()
+            .resolved(cx)
+            .expect("the preset install stores the resolved variant");
+        base_layer::scrollbar_geometry(resolved)
+    }
 
     #[test]
     #[cfg(target_os = "linux")]
@@ -358,6 +452,22 @@ mod tests {
             assert_eq!(theme.font_size, px(10.0 * 96.0 / 72.0));
             assert_eq!(theme.mono_font_size, px(10.0 * 96.0 / 72.0));
         });
+        cx.update(|cx| {
+            let g = installed_scrollbar(cx);
+            assert_eq!(g.track_width, px(16.));
+            assert_eq!(g.thumb_width, px(8.));
+            assert_eq!(g.thumb_inset, px(4.)); // centred in the 16 px rail
+            assert_eq!(g.min_thumb_length, px(20.));
+            assert_eq!(g.track, try_parse_color("#EFF0F1").unwrap());
+            assert_eq!(g.thumb, rgba_to_hsla(Rgba::new(0x23, 0x26, 0x29, 128)));
+            assert_eq!(g.thumb_active, g.thumb);
+            assert_eq!(g.thumb_hover, try_parse_color("#3DAEE9").unwrap());
+
+            let theme = Theme::global(cx);
+            assert_eq!(theme.scrollbar, g.track);
+            assert_eq!(theme.tokens.scrollbar_thumb.color, g.thumb);
+            assert_eq!(theme.tokens.scrollbar_thumb_hover.color, g.thumb_hover);
+        });
 
         cx.update(|cx| install_preset(&AccessibilityPreferences::default(), true, cx));
         cx.update(|cx| {
@@ -366,6 +476,22 @@ mod tests {
             assert_eq!(theme.background, try_parse_color("#202326").unwrap());
             assert_eq!(theme.font_size, px(10.0 * 96.0 / 72.0));
             assert_eq!(theme.mono_font_size, px(10.0 * 96.0 / 72.0));
+        });
+        cx.update(|cx| {
+            let g = installed_scrollbar(cx);
+            assert_eq!(g.track_width, px(16.));
+            assert_eq!(g.thumb_width, px(8.));
+            assert_eq!(g.thumb_inset, px(4.));
+            assert_eq!(g.min_thumb_length, px(20.));
+            assert_eq!(g.track, try_parse_color("#202326").unwrap());
+            assert_eq!(g.thumb, rgba_to_hsla(Rgba::new(0xfc, 0xfc, 0xfc, 128)));
+            assert_eq!(g.thumb_active, g.thumb);
+            assert_eq!(g.thumb_hover, try_parse_color("#3DAEE9").unwrap());
+
+            let theme = Theme::global(cx);
+            assert_eq!(theme.scrollbar, g.track);
+            assert_eq!(theme.tokens.scrollbar_thumb.color, g.thumb);
+            assert_eq!(theme.tokens.scrollbar_thumb_hover.color, g.thumb_hover);
         });
 
         cx.update(restore_breeze_traits);
@@ -381,6 +507,28 @@ mod tests {
             assert_eq!(theme.selection.a, 1.0);
             assert_eq!(theme.tokens.selection.color, theme.selection);
             assert_eq!(theme.tokens.table_hover.color, theme.accent);
+        });
+    }
+
+    /// The pin re-writes the connector's values after install. The scrollbar
+    /// styles are opaque, so the shared resize-handle write is the observable
+    /// result (`base_layer::apply_overrides` writes both).
+    #[gpui_kit::test]
+    fn install_scrollbar_styles_pins_the_connector_values(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| install_preset(&AccessibilityPreferences::default(), true, cx));
+
+        cx.update(|cx| {
+            let expected = base_layer::resizable_theme(
+                cx.global::<NativeTheme>()
+                    .resolved(cx)
+                    .expect("the preset install stores the resolved variant"),
+            );
+            install_scrollbar_styles(cx);
+            assert_eq!(
+                gpui_kit::base::Theme::global(cx).resizable.handle,
+                expected.handle
+            );
         });
     }
 }
