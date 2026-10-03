@@ -17,7 +17,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
-    ActiveTheme as _, Colorize as _, Disableable as _, Sizable as _, WindowExt as _,
+    ActiveTheme as _, Colorize as _, Disableable as _, Sizable as _,
     button::{Button, ButtonCustomVariant, ButtonVariants as _},
     h_flex,
     input::TextareaState,
@@ -393,7 +393,12 @@ impl ProtonctxApp {
     }
 
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        settings_ui::open_settings_dialog(cx.weak_entity(), window, cx);
+        settings_ui::open_settings_dialog(
+            self.remember_last_directory,
+            cx.weak_entity(),
+            window,
+            cx,
+        );
     }
 
     fn open_about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -637,26 +642,13 @@ impl ProtonctxApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let message = message.into();
-        window.open_dialog(cx, move |dialog, _window, cx| {
-            dialog
-                .title("Launch Error")
-                .w(dialog_ui::MESSAGE_DIALOG_WIDTH)
-                .child(
-                    div()
-                        .id("launch-error-message")
-                        .test_support()
-                        .debug_selector(|| "launch-error-message".into())
-                        .child(dialog_ui::dialog_alert_body(message.clone(), cx)),
-                )
-                .footer(
-                    h_flex().w_full().justify_end().child(
-                        Button::new("launch-error-close")
-                            .label("Close")
-                            .on_click(|_, window, cx| window.close_dialog(cx)),
-                    ),
-                )
-        });
+        let _ = dialog_ui::open_dialog(
+            window,
+            cx,
+            LaunchErrorContent {
+                message: message.into(),
+            },
+        );
     }
 
     /// Copy the selected game's compatdata (prefix) path, re-resolving the
@@ -706,59 +698,25 @@ impl ProtonctxApp {
             path.display()
         );
 
-        let weak = cx.weak_entity();
-        window.open_dialog(cx, move |dialog, window, cx| {
-            let Some(entity) = weak.upgrade() else {
-                return dialog;
-            };
-            // The builder re-runs every frame, so the in-flight flag flips the
-            // dialog non-dismissible as soon as the deletion starts.
-            let deleting = entity.read(cx).deleting_shader_cache;
-            let on_delete = window.listener_for(&entity, |app, _, window, cx| {
-                app.delete_shader_cache(window, cx);
-            });
-
-            dialog
-                .title("Delete Shader Cache")
-                .w(dialog_ui::MESSAGE_DIALOG_WIDTH)
-                .keyboard(!deleting)
-                .overlay_closable(!deleting)
-                .close_button(!deleting)
-                .child(
-                    div()
-                        .id("delete-cache-message")
-                        .test_support()
-                        .debug_selector(|| "delete-cache-message".into())
-                        .child(dialog_ui::dialog_alert_body(message.clone(), cx)),
-                )
-                .footer(
-                    h_flex()
-                        .w_full()
-                        .justify_end()
-                        .gap_2()
-                        .child(
-                            Button::new("delete-cache-cancel")
-                                .outline()
-                                .label("Cancel")
-                                .disabled(deleting)
-                                .on_click(|_, window, cx| window.close_dialog(cx)),
-                        )
-                        .child(
-                            Button::new("delete-cache-confirm")
-                                .danger()
-                                .label("Delete")
-                                .disabled(deleting)
-                                .on_click(on_delete),
-                        ),
-                )
-        });
+        // Abort before changing any state when the confirm window cannot open.
+        let content = DeleteCacheContent {
+            message,
+            app: cx.weak_entity(),
+            main: window.window_handle(),
+            deleting: false,
+        };
+        let _ = dialog_ui::open_dialog(window, cx, content);
     }
 
     /// Delete the selected game's shader cache and report the outcome exactly
     /// as the legacy model did. The recursive delete runs on a background task;
-    /// the confirm dialog stays open (non-dismissible) until every outcome is
+    /// the confirm window stays open (non-dismissible) until every outcome is
     /// known, then closes for all three of `Ok(true)`, `Ok(false)`, and `Err`.
-    fn delete_shader_cache(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn commit_delete_shader_cache(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Single-flight: repeat clicks while a deletion is in flight are no-ops
         // (the button is disabled, but a queued click can still land).
         if self.deleting_shader_cache {
@@ -769,8 +727,13 @@ impl ProtonctxApp {
             return;
         };
         self.deleting_shader_cache = true;
-        // Rebuild the dialog with its buttons disabled before yielding.
-        cx.notify();
+        // Repaint the confirm window with its buttons disabled and Esc vetoed
+        // before yielding.
+        let _ = dialog_ui::update_dialog_content::<DeleteCacheContent>(
+            "delete-shader-cache",
+            cx,
+            |content| content.deleting = true,
+        );
 
         self._delete_cache_task = Some(cx.spawn_in(window, async move |this, cx| {
             let library = PathBuf::from(&row.library_path);
@@ -792,7 +755,7 @@ impl ProtonctxApp {
                             cx,
                         );
                         this.status_text = "Shader cache deleted".to_string();
-                        window.close_dialog(cx);
+                        dialog_ui::close_dialog("delete-shader-cache", cx);
                     }
                     Ok(false) => {
                         this.append_log(
@@ -801,13 +764,12 @@ impl ProtonctxApp {
                             cx,
                         );
                         this.status_text = "No shader cache to delete".to_string();
-                        window.close_dialog(cx);
+                        dialog_ui::close_dialog("delete-shader-cache", cx);
                     }
                     Err(e) => {
-                        // Close the confirm first: `close_dialog` dismisses the
-                        // topmost dialog, so opening the error box first would
-                        // leave the confirm on top.
-                        window.close_dialog(cx);
+                        // Close the confirm first, then surface the error in its
+                        // own Launch Error window.
+                        dialog_ui::close_dialog("delete-shader-cache", cx);
                         this.show_launch_error(
                             format!("Failed to delete shader cache: {e}"),
                             window,
@@ -1051,6 +1013,101 @@ impl ProtonctxApp {
     }
 }
 
+/// Body of the native Launch Error window.
+struct LaunchErrorContent {
+    message: String,
+}
+
+impl dialog_ui::DialogContent for LaunchErrorContent {
+    fn id(&self) -> &'static str {
+        "launch-error"
+    }
+
+    fn title(&self) -> SharedString {
+        "Launch Error".into()
+    }
+
+    fn size(&self) -> dialog_ui::DialogSize {
+        dialog_ui::DialogSize::Message
+    }
+
+    fn body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
+        div()
+            .id("launch-error-message")
+            .test_support()
+            .debug_selector(|| "launch-error-message".into())
+            .child(dialog_ui::dialog_alert_body(self.message.clone(), cx))
+            .into_any_element()
+    }
+
+    fn actions(&self, _cx: &App) -> Vec<dialog_ui::DialogAction> {
+        vec![dialog_ui::DialogAction::close(
+            "launch-error-close",
+            "Close",
+        )]
+    }
+}
+
+/// Body of the native Delete Shader Cache confirmation. Dismissal (Esc, WM
+/// close, Cancel) is vetoed while the deletion is in flight.
+///
+/// `deleting` is a snapshot because the first frame renders while the owning
+/// entity is being updated; `commit_delete_shader_cache` pushes the flip with
+/// [`dialog_ui::update_dialog_content`].
+struct DeleteCacheContent {
+    message: String,
+    app: WeakEntity<ProtonctxApp>,
+    main: AnyWindowHandle,
+    deleting: bool,
+}
+
+impl dialog_ui::DialogContent for DeleteCacheContent {
+    fn id(&self) -> &'static str {
+        "delete-shader-cache"
+    }
+
+    fn title(&self) -> SharedString {
+        "Delete Shader Cache".into()
+    }
+
+    fn size(&self) -> dialog_ui::DialogSize {
+        dialog_ui::DialogSize::Message
+    }
+
+    fn body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
+        div()
+            .id("delete-cache-message")
+            .test_support()
+            .debug_selector(|| "delete-cache-message".into())
+            .child(dialog_ui::dialog_alert_body(self.message.clone(), cx))
+            .into_any_element()
+    }
+
+    fn actions(&self, _cx: &App) -> Vec<dialog_ui::DialogAction> {
+        let deleting = self.deleting;
+        let app = self.app.clone();
+        let main = self.main;
+        vec![
+            dialog_ui::DialogAction::close("delete-cache-cancel", "Cancel").enabled(!deleting),
+            dialog_ui::DialogAction::new(
+                "delete-cache-confirm",
+                "Delete",
+                dialog_ui::DialogActionKind::Danger,
+            )
+            .enabled(!deleting)
+            .on_click(move |_, _, cx| {
+                let _ = dialog_ui::with_window_and_entity(main, &app, cx, |app, window, cx| {
+                    app.commit_delete_shader_cache(window, cx);
+                });
+            }),
+        ]
+    }
+
+    fn dismissible(&self, _cx: &App) -> bool {
+        !self.deleting
+    }
+}
+
 impl Render for ProtonctxApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_compat_width(window, cx);
@@ -1219,15 +1276,25 @@ fn discovery_outcome(
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::component::{Root, WindowExt as _, table::ColumnSort};
+    use gpui_kit::component::{Root, table::ColumnSort};
     use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{AppContext as _, Focusable as _, Keystroke, TestAppContext, point, px, size};
+    use gpui_kit::{
+        AnyWindowHandle, AppContext as _, Focusable as _, Keystroke, TestAppContext, point, px,
+        size,
+    };
 
     use super::{
         ProtonctxApp, TRIM_SLACK, bind_keys, discovery_outcome, schedule_frame, trim_scroll_offset,
     };
     use crate::games::GameRow;
     use crate::models::Game;
+    use crate::views::dialog_ui;
+
+    /// The open native dialog window registered under `id`.
+    fn dialog_window(id: &str, cx: &mut TestAppContext) -> AnyWindowHandle {
+        cx.update(|cx| dialog_ui::window_for(id, cx))
+            .unwrap_or_else(|| panic!("no open {id} dialog window"))
+    }
 
     fn test_game(name: &str, app_id: u32) -> Game {
         Game {
@@ -1297,46 +1364,134 @@ mod tests {
         cx.update(gpui_kit::init);
 
         let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
             view = Some(app.clone());
             Root::new(app, window, cx)
         });
+        let main_id = main.window_id();
         let _view = view.unwrap();
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(main.into(), |_, window, cx| {
             window.render_frame(cx);
             window.click("main-menu", cx);
             window.render_frame(cx);
             window.press("down", cx);
             window.press("enter", cx);
-            window.render_frame(cx);
-            assert!(window.has_active_dialog(cx));
-
-            window.click("settings-ok", cx);
-            assert!(!window.has_active_dialog(cx));
         })
         .unwrap();
+
+        assert_eq!(cx.windows().len(), 2, "Settings opens a native window");
+        assert_ne!(dialog_window("settings", cx).window_id(), main_id);
+
+        let settings = dialog_window("settings", cx);
+        cx.update_window(settings, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("settings-ok", cx);
+        })
+        .unwrap();
+
+        assert_eq!(cx.windows().len(), 1, "OK closes the Settings window");
+        assert!(cx.update(|cx| !dialog_ui::is_open("settings", cx)));
     }
 
     #[gpui_kit::test]
-    fn about_menu_item_opens_dialog(cx: &mut TestAppContext) {
+    fn about_menu_item_opens_window(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            Root::new(app, window, cx)
+        });
+        let main_id = main.window_id();
+
+        cx.update_window(main.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click("main-menu", cx);
+            window.render_frame(cx);
+            window.press("down", cx);
+            window.press("down", cx);
+            window.press("down", cx);
+            window.press("enter", cx);
+        })
+        .unwrap();
+
+        assert_eq!(cx.windows().len(), 2, "About opens a second window");
+        let about = dialog_window("about", cx);
+        assert_ne!(about.window_id(), main_id);
+
+        cx.update_window(about, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("about-ok", cx);
+        })
+        .unwrap();
+        assert_eq!(cx.windows().len(), 1, "Ok closes the About window");
+        assert!(cx.update(|cx| !dialog_ui::is_open("about", cx)));
+    }
+
+    #[gpui_kit::test]
+    fn about_dialog_dedupes_and_cascades(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(main.into(), |_, window, cx| {
+            view.update(cx, |app, cx| app.open_about(window, cx));
+            let first = dialog_ui::window_for("about", cx)
+                .expect("About opens")
+                .window_id();
+            view.update(cx, |app, cx| app.open_about(window, cx));
+            let second = dialog_ui::window_for("about", cx)
+                .expect("About stays open")
+                .window_id();
+            assert_eq!(first, second, "reopen must reuse the About window");
+        })
+        .unwrap();
+
+        assert_eq!(cx.windows().len(), 2, "no duplicate About window");
+
+        cx.update_window(main.into(), |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+
+        assert!(
+            cx.update(|cx| dialog_ui::window_for("about", cx)).is_none(),
+            "About outlived its parent"
+        );
+        assert!(cx.windows().is_empty(), "orphan dialog window remains");
+    }
+
+    #[gpui_kit::test]
+    fn about_dialog_exposes_a11y_dialog_role(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
             Root::new(app, window, cx)
         });
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(main.into(), |_, window, cx| {
             window.render_frame(cx);
-            window.click("main-menu", cx);
+            crate::views::about_ui::open_about_dialog(window, cx);
+        })
+        .unwrap();
+
+        // `debug_a11y_tree_json` only fills in once a platform adapter activates
+        // accessibility, which the headless platform does not do. The observed
+        // element facts expose the same role/label the a11y node is built from.
+        let about = dialog_window("about", cx);
+        cx.update_window(about, |_, window, cx| {
             window.render_frame(cx);
-            window.press("down", cx);
-            window.press("down", cx);
-            window.press("down", cx);
-            window.press("enter", cx);
-            assert!(window.has_active_dialog(cx));
+            let root = window.find("dialog-root");
+            assert!(root.visible());
+            assert_eq!(root.role(), Some(gpui_kit::Role::Dialog));
+            assert_eq!(root.label(), Some("About protonctx"));
         })
         .unwrap();
     }
@@ -1355,22 +1510,26 @@ mod tests {
         cx.update(gpui_kit::init);
 
         let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
             view = Some(app.clone());
             Root::new(app, window, cx)
         });
         let view = view.unwrap();
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(main.into(), |_, window, cx| {
             window.render_frame(cx);
             window.click("main-menu", cx);
             window.render_frame(cx);
             window.press("down", cx);
             window.press("enter", cx);
-            window.render_frame(cx);
-            assert!(window.has_active_dialog(cx));
+        })
+        .unwrap();
 
+        assert_eq!(cx.windows().len(), 2, "Settings opens a native window");
+        let settings = dialog_window("settings", cx);
+        cx.update_window(settings, |_, window, cx| {
+            window.render_frame(cx);
             // The temp XDG root has no config, so the default (true) is shown;
             // toggling writes `false`.
             window.press("tab", cx);
@@ -1378,9 +1537,9 @@ mod tests {
             assert!(!view.read(cx).remember_last_directory);
 
             window.click("settings-ok", cx);
-            assert!(!window.has_active_dialog(cx));
         })
         .unwrap();
+        assert_eq!(cx.windows().len(), 1, "OK closes the Settings window");
 
         let config_path = std::path::Path::new(&config_home)
             .join("protonctx")
@@ -1705,7 +1864,7 @@ mod tests {
         cx.update(gpui_kit::init);
 
         let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
             view = Some(app.clone());
             Root::new(app, window, cx)
@@ -1715,13 +1874,18 @@ mod tests {
         let long = "Failed to launch /home/user/.local/share/Steam/steamapps/common/\
                     Proton - Experimental/files/bin/wine64 with a very long argument list"
             .repeat(2);
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(main.into(), |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
                 app.show_launch_error(long.clone(), window, cx);
             });
-            window.render_frame(cx);
+        })
+        .unwrap();
 
+        assert_eq!(cx.windows().len(), 2, "Launch Error opens a native window");
+        let error = dialog_window("launch-error", cx);
+        cx.update_window(error, |_, window, cx| {
+            window.render_frame(cx);
             let message = window.find("launch-error-message");
             let bounds = message.bounds();
             // A single line at the test rem is 20 px; anything taller means the
@@ -1731,13 +1895,34 @@ mod tests {
                 "long message did not wrap: {bounds:?}"
             );
             // The dialog body is 420 px minus the 16 px side paddings; a
-            // message wider than that would be clipped by `overflow_hidden`.
+            // message wider than that would be clipped.
             assert!(
                 bounds.size.width <= px(388.),
                 "message exceeded the dialog body width: {bounds:?}"
             );
         })
         .unwrap();
+
+        // A second error replaces the message in the same window instead of
+        // stacking another one.
+        cx.update_window(main.into(), |_, window, cx| {
+            view.update(cx, |app, cx| {
+                app.show_launch_error("short failure", window, cx);
+            });
+        })
+        .unwrap();
+        assert_eq!(cx.windows().len(), 2, "repeated error stacked windows");
+        let error = dialog_window("launch-error", cx);
+        cx.update_window(error, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.find("launch-error-message").bounds().size.height <= px(20.),
+                "replacement message did not replace the old text"
+            );
+            window.click("launch-error-close", cx);
+        })
+        .unwrap();
+        assert_eq!(cx.windows().len(), 1, "Close dismisses the error window");
     }
 
     #[gpui_kit::test]
@@ -1754,7 +1939,7 @@ mod tests {
         std::fs::create_dir_all(cache.join("fozpipelinesv6")).unwrap();
 
         let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
             view = Some(app.clone());
             Root::new(app, window, cx)
@@ -1772,21 +1957,41 @@ mod tests {
             app.selected_row = Some(0);
         });
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(main.into(), |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| app.confirm_delete_shader_cache(window, cx));
-            window.render_frame(cx);
-            assert!(window.has_active_dialog(cx));
-            window.click("delete-cache-confirm", cx);
         })
         .unwrap();
+
+        assert_eq!(cx.windows().len(), 2, "confirm opens a native window");
+        let confirm = dialog_window("delete-shader-cache", cx);
+        cx.update_window(confirm, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("delete-cache-confirm", cx);
+            assert!(view.read(cx).deleting_shader_cache);
+
+            // In flight the confirm is locked: repeat clicks are inert (the
+            // core Button disables pointer activation, and commit is
+            // single-flight) and Esc is vetoed by `dismissible`.
+            window.render_frame(cx);
+            window.click("delete-cache-confirm", cx);
+            assert!(view.read(cx).deleting_shader_cache);
+            window.press("escape", cx);
+        })
+        .unwrap();
+        assert_eq!(
+            cx.windows().len(),
+            2,
+            "Esc must not close the in-flight confirm"
+        );
 
         // The recursive delete runs on the background executor; drive the tasks
         // until the completion handler has run.
         cx.run_until_parked();
 
-        cx.update_window(handle.into(), |_, window, cx| {
-            assert!(!window.has_active_dialog(cx), "confirm stayed open");
+        assert_eq!(cx.windows().len(), 1, "confirm closes after deletion");
+        assert!(cx.update(|cx| !dialog_ui::is_open("delete-shader-cache", cx)));
+        cx.update(|cx| {
             assert!(!view.read(cx).deleting_shader_cache);
             assert_eq!(view.read(cx).status_text, "Shader cache deleted");
             assert!(
@@ -1796,8 +2001,7 @@ mod tests {
                 "log did not report the deletion: {}",
                 view.read(cx).log_text
             );
-        })
-        .unwrap();
+        });
 
         assert!(!cache.exists(), "cache directory survived the delete");
         std::fs::remove_dir_all(&root).ok();
@@ -1808,7 +2012,7 @@ mod tests {
         cx.update(gpui_kit::init);
 
         let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
             view = Some(app.clone());
             Root::new(app, window, cx)
@@ -1828,9 +2032,14 @@ mod tests {
             app.selected_row = Some(0);
         });
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(main.into(), |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| app.confirm_delete_shader_cache(window, cx));
+        })
+        .unwrap();
+
+        let confirm = dialog_window("delete-shader-cache", cx);
+        cx.update_window(confirm, |_, window, cx| {
             window.render_frame(cx);
             window.click("delete-cache-confirm", cx);
         })
@@ -1838,15 +2047,13 @@ mod tests {
 
         cx.run_until_parked();
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        // The confirm closed first, then the error box opened as its own window.
+        assert_eq!(cx.windows().len(), 2, "error window replaces the confirm");
+        assert!(cx.update(|cx| !dialog_ui::is_open("delete-shader-cache", cx)));
+        let error = dialog_window("launch-error", cx);
+        cx.update_window(error, |_, window, cx| {
             window.render_frame(cx);
-            // The confirm closed first, then the error box opened on top.
-            assert!(window.has_active_dialog(cx), "error dialog did not open");
             assert!(window.find("launch-error-close").visible());
-            assert!(
-                window.try_find("delete-cache-confirm").is_none(),
-                "confirm dialog is still on screen"
-            );
             assert!(!view.read(cx).deleting_shader_cache);
         })
         .unwrap();
@@ -1857,33 +2064,35 @@ mod tests {
         cx.update(gpui_kit::init);
 
         let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
             let app = cx.new(|cx| ProtonctxApp::new(window, cx));
             view = Some(app.clone());
             Root::new(app, window, cx)
         });
         let view = view.unwrap();
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(main.into(), |_, window, cx| {
             window.render_frame(cx);
 
             // Without a selection the guard falls through to the existing
-            // "No game selected" error box.
-            view.update(cx, |app, cx| app.delete_shader_cache(window, cx));
-            assert!(window.has_active_dialog(cx));
-            window.close_dialog(cx);
+            // "No game selected" error window.
+            view.update(cx, |app, cx| app.commit_delete_shader_cache(window, cx));
+            assert!(dialog_ui::is_open("launch-error", cx));
+            dialog_ui::close_dialog("launch-error", cx);
 
             // While a deletion is in flight a second call is a no-op and must
             // not spawn another task.
             view.update(cx, |app, cx| {
                 app.deleting_shader_cache = true;
-                app.delete_shader_cache(window, cx);
+                app.commit_delete_shader_cache(window, cx);
                 assert!(app._delete_cache_task.is_none());
                 assert!(app.deleting_shader_cache);
             });
-            assert!(!window.has_active_dialog(cx));
         })
         .unwrap();
+
+        assert_eq!(cx.windows().len(), 1, "no error window after the no-op");
+        assert!(cx.update(|cx| !dialog_ui::is_open("launch-error", cx)));
     }
 
     #[gpui_kit::test]
