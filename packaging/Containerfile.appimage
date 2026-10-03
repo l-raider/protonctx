@@ -12,33 +12,24 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates build-essential pkg-config cmake \
-    file patchelf git \
-    qt6-base-dev libqt6svg6-dev qt6-tools-dev \
-    qt6-declarative-dev \
+    file git \
+    libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev \
+    libfontconfig1-dev libssl-dev \
     librsvg2-bin \
-    # Native KDE Plasma look: bundles the Breeze widget style
-    # (styles/breeze6.so) and the Plasma platform theme
-    # (platformthemes/KDEPlasmaPlatformTheme6.so). These are KF6 plugins whose
-    # transitive KF6/Qt dependencies linuxdeploy pulls into the AppImage at
-    # build time. This substantially grows the bundle but gives a native
-    # Plasma theme with Fusion as the fallback on non-KDE desktops.
-    kde-style-breeze plasma-integration \
   && rm -rf /var/lib/apt/lists/*
 
-# Rust stable (edition 2024 requires 1.85+; README states 1.87+).
+# Rust stable (edition 2024 requires 1.85+; Cargo.toml requires 1.95+).
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
   | sh -s -- -y --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# linuxdeploy + Qt bundling plugin.
+# linuxdeploy bundles the executable's shared-library dependencies.
 RUN curl -fLo /usr/local/bin/linuxdeploy \
       "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
-  && curl -fLo /usr/local/bin/linuxdeploy-plugin-qt \
-      "https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage" \
-  && chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/linuxdeploy-plugin-qt
+  && chmod +x /usr/local/bin/linuxdeploy
 
 # linuxdeploy ships as an AppImage and normally needs FUSE2. The build script
-# sets APPIMAGE_EXTRACT_AND_RUN=1 so the tools run without mounting FUSE,
+# sets APPIMAGE_EXTRACT_AND_RUN=1 so the tool runs without mounting FUSE,
 # therefore no FUSE package is required here.
 
 WORKDIR /src

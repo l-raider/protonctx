@@ -19,7 +19,7 @@ target/
 
 vendor/
 AppDir/
-protonctx-x86_64.AppImage
+protonctx-*.AppImage
 squashfs-root/
 flatpak/
 *.flatpak

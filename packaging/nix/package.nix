@@ -4,39 +4,47 @@
   fetchFromGitHub,
   pkg-config,
   autoPatchelfHook,
-  qt6,
+  libxkbcommon,
+  libx11,
+  wayland,
+  fontconfig,
+  freetype,
+  openssl,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
   pname = "protonctx";
-  version = "1.1.0";
+  version = "1.2.1";
 
   src = fetchFromGitHub {
     owner = "l-raider";
     repo = "protonctx";
-    rev = "a67da8aed2a2451b8668554090dd48fc9e9af01f";
-    hash = "sha256-2WxLThI/vLAEcMUVcObzqo/cywuSO1MRopczZHTtCbQ=";
+    rev = "v${finalAttrs.version}";
+    # Update on each release: run `nix-prefetch-github l-raider protonctx --rev v${version}`
+    # and paste the resulting hash here.
+    hash = lib.fakeHash;
   };
 
   # No explicit cargoHash/cargoLock: buildRustPackage auto-detects
   # ${src}/Cargo.lock (it is committed upstream) and derives the dependency
   # hash from it.
 
-  # cxx-qt locates Qt via `qmake` on PATH and resolves headers/libs/moc/rcc
-  # through `qmake -query`, so qtbase's dev output must be available at build
-  # time. wrapQtAppsHook produces a wrapper with QT_PLUGIN_PATH so the SVG
-  # imageformat and the platform plugin resolve at runtime; autoPatchelfHook
-  # fixes rpaths for the Qt shared libraries the binary links against.
+  # GPUI's X11 backend links xkbcommon/X11 at build time (pkg-config via the
+  # xkbcommon crate); the Wayland client, fontconfig/freetype, and the Vulkan
+  # loader are dlopen()'d at runtime. autoPatchelfHook fixes the rpaths of the
+  # libraries that appear as NEEDED entries.
   nativeBuildInputs = [
     pkg-config
     autoPatchelfHook
-    qt6.wrapQtAppsHook
-    qt6.qtbase
   ];
 
   buildInputs = [
-    qt6.qtbase
-    qt6.qtsvg # SVG imageformat plugin for the embedded icon
+    libxkbcommon
+    libx11
+    wayland
+    fontconfig
+    freetype
+    openssl
   ];
 
   # Install the desktop entry and the pre-rendered hicolor icon theme
@@ -59,8 +67,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   meta = {
     description = "Launch executables inside a Steam game's Proton context";
     longDescription = ''
-      A single-window helper GUI (native Qt Widgets) that lists installed Steam
-      games and lets you run an arbitrary .exe — or a built-in Wine tool such as
+      A single-window helper GUI (GPUI) that lists installed Steam games and
+      lets you run an arbitrary .exe — or a built-in Wine tool such as
       winecfg/taskmgr — inside a selected game's Proton prefix.
     '';
     homepage = "https://github.com/l-raider/protonctx";

@@ -1,41 +1,59 @@
 //! protonctx — launch executables inside a Steam game's Proton context.
+//!
+//! The whole application is safe Rust: the UI is a GPUI view
+//! ([`views::main_ui::ProtonctxApp`]) and the Steam/Proton logic lives in the
+//! pure-Rust backend modules.
 
+#![forbid(unsafe_code)]
 // Test fixtures may panic on setup failure (`unwrap` is fine in tests); the
 // `unwrap_used = "deny"` workspace lint applies to production code only.
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
-mod app_backend;
+mod assets;
 mod config;
 mod flatpak;
+mod games;
 mod launcher;
+mod log;
+mod menu;
 mod models;
 mod steam;
+mod system_theme;
+mod theme;
+mod views;
 
-// FFI to the hand-written C++ Qt Widgets UI
-unsafe extern "C" {
-    fn qt_app_init();
-    fn qt_show_main_window();
-    fn qt_app_exec() -> i32;
-    fn qt_load_games();
-}
+use gpui_kit::*;
 
-fn main() -> std::process::ExitCode {
-    // Create QApplication (Qt Widgets) so native dialogs work.
-    unsafe { qt_app_init() };
+gpui_kit::actions!(protonctx, [RefreshGames, LogCopy, LogSelectAll, LogClear]);
 
-    unsafe { qt_show_main_window() };
+fn main() {
+    gpui_kit::application()
+        .with_assets(assets::AppAssets)
+        .run(|cx| {
+            gpui_kit::init(cx);
 
-    // Populate the games table after the window exists (model attached in C++).
-    unsafe { qt_load_games() };
+            // Scrollbar policy + the static KDE theme read once at startup.
+            // Do not observe `window.appearance()`: the platform appearance
+            // starts as Light until the portal answers, which would flash the
+            // wrong variant (P27).
+            theme::init(cx);
 
-    // qt_app_exec() returns the QApplication exit code (i32) or 1 on init
-    // failure. Map it to a clean 0/1 exit status: a nonzero Qt exit code is an
-    // error, but its exact value is not meaningful to a shell, and truncating
-    // to u8 would silently wrap negative or >255 codes.
-    let code = unsafe { qt_app_exec() };
-    if code == 0 {
-        std::process::ExitCode::SUCCESS
-    } else {
-        std::process::ExitCode::FAILURE
-    }
+            cx.bind_keys([KeyBinding::new("f5", RefreshGames, None)]);
+
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::centered(size(px(760.), px(520.)), cx)),
+                    window_min_size: Some(size(px(468.), px(288.))),
+                    app_id: Some("protonctx".to_string()),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(format!("protonctx v{}", env!("CARGO_PKG_VERSION")).into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| views::main_ui::ProtonctxApp::new(window, cx)),
+            )
+            .expect("failed to open window");
+        });
 }

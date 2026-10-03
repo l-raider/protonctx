@@ -339,8 +339,14 @@ mod tests {
         mk_common(&root, "SteamLinuxRuntime_4");
 
         // Runtimes must never be resolved as Proton tools.
-        assert_eq!(proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "steam_linux_runtime_4"), None);
-        assert_eq!(proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "proton_experimental"), None);
+        assert_eq!(
+            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "steam_linux_runtime_4"),
+            None
+        );
+        assert_eq!(
+            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "proton_experimental"),
+            None
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -353,8 +359,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).ok();
 
-        assert_eq!(proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "GE-Proton10-34"), None);
-        assert_eq!(proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "proton_experimental"), None);
+        assert_eq!(
+            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "GE-Proton10-34"),
+            None
+        );
+        assert_eq!(
+            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "proton_experimental"),
+            None
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -365,8 +377,14 @@ mod tests {
             std::env::temp_dir().join(format!("protonctx_test_tool_empty_{}", std::process::id()));
         std::fs::create_dir_all(&root).ok();
 
-        assert_eq!(proton_dir_for_tool(&root, &builtin_tool_dirs(&root), ""), None);
-        assert_eq!(proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "default"), None);
+        assert_eq!(
+            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), ""),
+            None
+        );
+        assert_eq!(
+            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "default"),
+            None
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -374,10 +392,9 @@ mod tests {
     // --- builtin_tool_dirs / resolve_builtin_dir (cached lookup) ---
 
     #[test]
-    fn builtin_map_parses_all_tools_once() {        let root = std::env::temp_dir().join(format!(
-            "protonctx_test_builtin_map_{}",
-            std::process::id()
-        ));
+    fn builtin_map_parses_all_tools_once() {
+        let root =
+            std::env::temp_dir().join(format!("protonctx_test_builtin_map_{}", std::process::id()));
         let steamapps = root.join("steamapps");
         write_builtin_appmanifest(
             &steamapps,
@@ -434,10 +451,7 @@ mod tests {
             proton_dir_for_tool(&root, &map, "proton_experimental"),
             Some(pe.clone())
         );
-        assert_eq!(
-            proton_dir_for_tool(&root, &map, "proton_hotfix"),
-            Some(ph)
-        );
+        assert_eq!(proton_dir_for_tool(&root, &map, "proton_hotfix"), Some(ph));
         assert_eq!(
             proton_dir_for_tool(&root, &map, "proton_experimental"),
             Some(pe)
@@ -458,10 +472,7 @@ mod tests {
         std::fs::create_dir_all(&ge).unwrap();
 
         let map = builtin_tool_dirs(&root);
-        assert_eq!(
-            proton_dir_for_tool(&root, &map, "GE-Proton10-34"),
-            Some(ge)
-        );
+        assert_eq!(proton_dir_for_tool(&root, &map, "GE-Proton10-34"), Some(ge));
 
         std::fs::remove_dir_all(&root).ok();
     }

@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Build a protonctx .deb from scratch: builds the build container, then runs
 # the actual .deb build inside it (so the binary links against Debian 13's
-# glibc/Qt — the oldest we must support, and dpkg-shlibdeps fills in the Qt6
-# runtime dependencies).
+# glibc — the oldest we must support, and dpkg-shlibdeps fills in the runtime
+# library dependencies).
 #
 # Usage (from the project root):
 #   ./build-deb.sh

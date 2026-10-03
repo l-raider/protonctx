@@ -2,31 +2,37 @@
 name = "protonctx"
 version = "1.2.1"
 edition = "2024"
+rust-version = "1.95"
 license = "GPL-3.0-only"
 description = "Launch executables inside a Steam game's Proton context"
 repository = "https://github.com/l-raider/protonctx"
 
-# Opt into the workspace lints (clippy denies below).
+# Opt into the workspace lints (forbid unsafe + clippy denies below).
 [lints]
 workspace = true
 
 [dependencies]
-cxx-qt = "0.10"
-cxx-qt-lib = "0.10"
+gpui-kit = { version = "0.7.0", default-features = false, features = ["component", "assets"] }
+native-theme = { version = "0.6.0", default-features = false }
+native-theme-gpui = { version = "0.6.0", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+async-channel = "2"
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser"] }
+url = "2"
 steam-vdf-parser = "0.1"
-cxx = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-[build-dependencies]
-cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
-# Must match [dependencies] cxx pin.
-cxx = "1.0"
+[dev-dependencies]
+gpui-kit = { version = "0.7.0", features = ["test-support"] }
 
 [profile.release]
 lto = true
 strip = true
 codegen-units = 1
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"
@@ -34,8 +40,8 @@ todo = "deny"
 unwrap_used = "deny"
 
 # --- Debian packaging (cargo-deb) ---
-# The binary is listed explicitly to ensure it is packed
-# regardless of cargo-deb's auto-detection. Qt6 runtime libraries are pulled in
+# The binary is listed explicitly to ensure it is packed regardless of
+# cargo-deb's auto-detection. Shared-library dependencies are pulled in
 # automatically via `depends = "$auto"` (requires dpkg-shlibdeps on the build
 # host — use a Debian/Ubuntu machine to get populated Depends).
 [package.metadata.deb]

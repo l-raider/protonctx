@@ -5,7 +5,8 @@ Helper GUI tool to launch executables inside a Steam game's Proton context.
 
 A single-window Linux (mainly KDE Plasma) utility that lists installed Steam games and lets
 you run an arbitrary `.exe` (or a built-in Wine tool such as `winecfg`/`taskmgr`) inside a
-selected game's Proton prefix.
+selected game's Proton prefix. The UI is built with [GPUI](https://gpui.rs/) — no Qt or
+C++ toolchain is required to build it.
 
 ## Features
 
@@ -16,17 +17,19 @@ selected game's Proton prefix.
   (`winecfg`, Task Manager, Explorer, Registry Editor).
 - Right-click a row for a context menu (launch tools, copy the compatdata or
   compatibility-tool path, or **delete the game's shader cache**).
-- Standard top menu with **Settings** (remember the last-used directory) and **About**
+- Toolbar menu with **Settings** (remember the last-used directory) and **About**
   (version info).
 
 ## Building
 
 Requirements:
 
-- Rust 2024 edition toolchain (1.87+).
-- Qt 6 development libraries (minimum **Qt 6.8 LTS**; the UI is native Qt Widgets via
-  cxx-qt). On Fedora: `dnf install qt6-qtbase-devel`. A C++ toolchain and `qmake` are
-  also required.
+- Rust 2024 edition toolchain (1.95+).
+- System libraries used by GPUI (X11/Wayland, xkbcommon, fontconfig, OpenSSL). On
+  Debian/Ubuntu: `libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev
+  libfontconfig1-dev libssl-dev`. On Fedora: `libxkbcommon-devel
+  libxkbcommon-x11-devel wayland-devel libX11-devel fontconfig-devel openssl-devel`.
+- A C toolchain and `pkg-config` for the native `-sys` crates in the dependency tree.
 
 ```sh
 cargo build --release

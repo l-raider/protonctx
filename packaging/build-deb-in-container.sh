@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # This script is meant to run INSIDE the build container (see
 # packaging/Containerfile.deb) so that the binary links against Debian 13's
-# oldest-supported glibc/Qt and `dpkg-shlibdeps` populates the runtime
+# oldest-supported glibc and `dpkg-shlibdeps` populates the runtime
 # `Depends:` field. Run from the repo root, e.g.:
 #
 #   podman run --rm -v "$PWD":/src -w /src protonctx-deb \
