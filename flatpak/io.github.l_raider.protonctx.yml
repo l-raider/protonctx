@@ -1,0 +1,59 @@
+app-id: io.github.l_raider.protonctx
+
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+
+command: protonctx
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  # Read-only access to $HOME so protonctx can read the Steam vdf files
+  # (libraryfolders.vdf, config.vdf, appmanifest_*.acf) that live under
+  # ~/.local/share/Steam and ~/.steam/.
+  - --filesystem=home:ro
+  # Required for the planned flatpak-spawn support: lets the app talk to the
+  # org.freedesktop.Flatpak D-Bus interface to spawn processes on the host.
+  - --talk-name=org.freedesktop.Flatpak
+
+build-options:
+  # Make the Rust toolchain visible to the build system.
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  - name: protonctx
+    buildsystem: simple
+    build-commands:
+      # Inject the vendor config so cargo finds all crates without the internet.
+      - mkdir -p .cargo
+      - cp flatpak/cargo-vendor-config.toml .cargo/config.toml
+      - cargo --offline build --profile publicrelease
+      - APP_VERSION=$(awk -F '"' '/^version = "/{print $2; exit}' Cargo.toml) && APP_RELEASE_DATE=$(date -u +%F) && sed -e "s/@APP_VERSION@/${APP_VERSION}/g" -e "s/@APP_RELEASE_DATE@/${APP_RELEASE_DATE}/g" flatpak/io.github.l_raider.protonctx.metainfo.xml > io.github.l_raider.protonctx.metainfo.xml
+      - install -Dm755 target/publicrelease/protonctx /app/bin/protonctx
+      - install -Dm644 flatpak/io.github.l_raider.protonctx.desktop /app/share/applications/io.github.l_raider.protonctx.desktop
+      - install -Dm644 io.github.l_raider.protonctx.metainfo.xml /app/share/metainfo/io.github.l_raider.protonctx.metainfo.xml
+      - install -Dm644 flatpak/icons/hicolor/scalable/apps/io.github.l_raider.protonctx.svg /app/share/icons/hicolor/scalable/apps/io.github.l_raider.protonctx.svg
+      - for size in 16 32 48 64 128 256 512; do
+          install -Dm644
+            "flatpak/icons/hicolor/${size}x${size}/apps/io.github.l_raider.protonctx.png"
+            "/app/share/icons/hicolor/${size}x${size}/apps/io.github.l_raider.protonctx.png";
+        done
+    sources:
+      # Project source including the pre-vendored crate directory.
+      # flatpak/vendor/ and flatpak/cargo-vendor-config.toml are generated
+      # locally by build-flatpak.sh (cargo vendor) and not committed to git.
+      - type: dir
+        path: ..
+        skip:
+          - .git/
+          - target/
+          - flatpak/.flatpak-builder/
+          - flatpak/build/
+          - flatpak/repo/

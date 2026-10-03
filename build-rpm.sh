@@ -3,8 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-cargo build --release
-strip -s target/release/protonctx
+cargo build --profile publicrelease
+strip -s target/publicrelease/protonctx
 ./packaging/render-icons.sh
 
 DIST="$(rpm --eval '%{dist}' 2>/dev/null || true)"
@@ -15,7 +15,7 @@ if [[ "${DIST}" == '%{dist}' ]]; then
 fi
 RELEASE="1${DIST}"
 
-cargo generate-rpm -s "release = \"${RELEASE}\""
+cargo generate-rpm --profile publicrelease -s "release = \"${RELEASE}\""
 
-echo "Built target/release/protonctx"
+echo "Built target/publicrelease/protonctx"
 echo "Built target/generate-rpm/protonctx-*.rpm"

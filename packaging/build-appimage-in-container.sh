@@ -12,8 +12,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# 1. Build the release binary.
-cargo build --release
+# 1. Build the distribution binary.
+cargo build --profile publicrelease
 
 # 2. Assemble the AppDir.
 APPDIR="$(pwd)/AppDir"
@@ -22,7 +22,7 @@ mkdir -p "$APPDIR/usr/bin" \
          "$APPDIR/usr/share/applications" \
          "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 
-install -m755 target/release/protonctx "$APPDIR/usr/bin/protonctx"
+install -m755 target/publicrelease/protonctx "$APPDIR/usr/bin/protonctx"
 install -m644 packaging/protonctx.desktop \
   "$APPDIR/usr/share/applications/protonctx.desktop"
 install -m644 ui/icon/icon.svg \

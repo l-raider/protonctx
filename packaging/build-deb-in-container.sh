@@ -13,13 +13,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# 1. Build the release binary.
-cargo build --release
+# 1. Build the distribution binary.
+cargo build --profile publicrelease
 
 # 2. Render PNG icons (needs rsvg-convert from librsvg2-tools).
 ./packaging/render-icons.sh
 
-# 3. Package the .deb. --no-build reuses the freshly built binary above.
-cargo deb --no-build
+# 3. Package the .deb. --no-build reuses the freshly built binary above;
+#    --profile makes cargo-deb resolve its target/release asset paths to
+#    target/publicrelease.
+cargo deb --no-build --profile publicrelease
 
 echo "Built target/debian/protonctx_*.deb"

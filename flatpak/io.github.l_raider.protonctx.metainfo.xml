@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.l_raider.protonctx</id>
+  <name>protonctx</name>
+  <summary>Launch executables inside a Steam game's Proton context</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0</project_license>
+  <launchable type="desktop-id">io.github.l_raider.protonctx.desktop</launchable>
+  <url type="homepage">https://github.com/l-raider/protonctx/</url>
+  <description>
+    <p>protonctx is a helper GUI tool to launch executables inside a Steam game's Proton context. It reads Steam's vdf files to locate installed games and their Proton prefixes, then runs the requested executable with the correct environment for that game's compatibility tool.</p>
+  </description>
+  <releases>
+    <release version="@APP_VERSION@" date="@APP_RELEASE_DATE@"/>
+  </releases>
+  <provides>
+    <binary>protonctx</binary>
+  </provides>
+</component>

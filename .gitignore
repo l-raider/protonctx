@@ -21,6 +21,12 @@ vendor/
 AppDir/
 protonctx-*.AppImage
 squashfs-root/
-flatpak/
 *.flatpak
 .kilo/
+
+# Flatpak build artifacts (manifest/desktop/metainfo sources stay tracked)
+flatpak/build/
+flatpak/repo/
+flatpak/vendor/
+flatpak/icons/
+flatpak/cargo-vendor-config.toml
