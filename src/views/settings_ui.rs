@@ -4,10 +4,11 @@
 //! immediately on change (the legacy Qt dialog did the same), so the value
 //! survives even if the app is killed before exit.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::*;
 
-use crate::views::dialog_ui::{self, DialogAction, DialogActionKind, DialogContent};
+use crate::views::dialog_ui::{self, DialogAction, DialogContent};
 use crate::views::main_ui::ProtonctxApp;
 
 /// Body of the native Settings dialog; the template provides the window chrome.
@@ -59,9 +60,12 @@ impl DialogContent for SettingsContent {
     }
 
     fn actions(&self, _cx: &App) -> Vec<DialogAction> {
+        // Qt's settings dialog had a single Close button; changes persist as
+        // they are made, so OK just dismisses and is the keyboard default.
         vec![
-            DialogAction::close("settings-cancel", "Cancel"),
-            DialogAction::new("settings-ok", "OK", DialogActionKind::Primary),
+            DialogAction::new("settings-ok", "OK")
+                .icon(IconName::Check)
+                .default_button(),
         ]
     }
 }

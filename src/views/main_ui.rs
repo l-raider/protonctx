@@ -1065,7 +1065,7 @@ impl dialog_ui::DialogContent for LaunchErrorContent {
 
     fn actions(&self, _cx: &App) -> Vec<dialog_ui::DialogAction> {
         vec![
-            dialog_ui::DialogAction::close("launch-error-close", "OK")
+            dialog_ui::DialogAction::new("launch-error-close", "OK")
                 .icon(IconName::Check)
                 .default_button(),
         ]
@@ -1111,12 +1111,18 @@ impl dialog_ui::DialogContent for DeleteCacheContent {
         "Delete Shader Cache".into()
     }
 
+    /// Qt's `QMessageBox::warning` proportions: wide enough for the path and
+    /// the closing paragraph, with the shorter height of the Qt dialog.
+    fn size(&self) -> Size<Pixels> {
+        size(px(520.), px(230.))
+    }
+
     fn body(&mut self, _window: &mut Window, cx: &mut App) -> AnyElement {
         div()
             .id("delete-cache-message")
             .test_support()
             .debug_selector(|| "delete-cache-message".into())
-            .child(dialog_ui::dialog_alert_body(self.message.clone(), cx))
+            .child(dialog_ui::dialog_warning_body(self.message.clone(), cx))
             .into_any_element()
     }
 
@@ -1125,18 +1131,19 @@ impl dialog_ui::DialogContent for DeleteCacheContent {
         let app = self.app.clone();
         let main = self.main;
         vec![
-            dialog_ui::DialogAction::close("delete-cache-cancel", "Cancel").enabled(!deleting),
-            dialog_ui::DialogAction::new(
-                "delete-cache-confirm",
-                "Delete",
-                dialog_ui::DialogActionKind::Danger,
-            )
-            .enabled(!deleting)
-            .on_click(move |_, _, cx| {
-                let _ = dialog_ui::with_window_and_entity(main, &app, cx, |app, window, cx| {
-                    app.commit_delete_shader_cache(window, cx);
-                });
-            }),
+            dialog_ui::DialogAction::new("delete-cache-confirm", "Yes")
+                .icon(IconName::Check)
+                .enabled(!deleting)
+                .on_click(move |_, _, cx| {
+                    let _ = dialog_ui::with_window_and_entity(main, &app, cx, |app, window, cx| {
+                        app.commit_delete_shader_cache(window, cx);
+                    });
+                }),
+            // Qt shows No to the right and makes it the default (safe) button.
+            dialog_ui::DialogAction::new("delete-cache-cancel", "No")
+                .icon(IconName::Ban)
+                .default_button()
+                .enabled(!deleting),
         ]
     }
 

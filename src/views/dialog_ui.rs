@@ -6,7 +6,7 @@
 //! close, focus, accessibility metadata, a scrollable body, and the action
 //! footer. Contents only supply text, widgets, and buttons.
 //!
-//! Body copy wraps inside [`dialog_alert_body`]'s `flex_1().min_w_0()` column;
+//! Body copy wraps inside [`dialog_warning_body`]'s `flex_1().min_w_0()` column;
 //! without it the flex item's auto minimum size keeps the text at its intrinsic
 //! (unwrapped) width and the scroll container clips it.
 
@@ -17,11 +17,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, WindowExt as _,
-    button::{Button, ButtonVariants as _},
-    h_flex,
-    notification::Notification,
-    v_flex,
+    ActiveTheme as _, Icon, WindowExt as _, h_flex, notification::Notification, v_flex,
 };
 use gpui_kit::*;
 
@@ -29,22 +25,14 @@ use gpui_kit::*;
 /// [`DialogContent::size`] when they need different dimensions.
 pub const DEFAULT_DIALOG_SIZE: Size<Pixels> = size(px(420.), px(240.));
 
-/// Visual variant of a dialog action button.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DialogActionKind {
-    Primary,
-    Outline,
-    Danger,
-}
-
 /// Click handler for one dialog action button.
 type DialogClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// One button in the dialog footer.
+/// One button in the dialog footer. Every dialog action shares the Breeze
+/// outline style, so hover and active feedback is identical everywhere.
 pub struct DialogAction {
     id: &'static str,
     label: SharedString,
-    kind: DialogActionKind,
     icon: Option<IconName>,
     enabled: bool,
     is_default: bool,
@@ -53,21 +41,15 @@ pub struct DialogAction {
 
 impl DialogAction {
     /// A new action whose default click closes the dialog window.
-    pub fn new(id: &'static str, label: impl Into<SharedString>, kind: DialogActionKind) -> Self {
+    pub fn new(id: &'static str, label: impl Into<SharedString>) -> Self {
         Self {
             id,
             label: label.into(),
-            kind,
             icon: None,
             enabled: true,
             is_default: false,
             on_click: Box::new(|_, window, _| window.remove_window()),
         }
-    }
-
-    /// An outline action that closes the dialog window (Cancel/Close).
-    pub fn close(id: &'static str, label: impl Into<SharedString>) -> Self {
-        Self::new(id, label, DialogActionKind::Outline)
     }
 
     /// Marks this as the dialog's default button: it takes keyboard focus when
@@ -93,93 +75,44 @@ impl DialogAction {
         self
     }
 
-    /// The styled button variant used when the action is not the default.
+    /// The Breeze-styled button, shared by every dialog action so hover and
+    /// active feedback match. Only the default action takes a caller-provided
+    /// focus handle so the dialog can focus it on open; the rest keep their own.
     fn into_button(self, default_focus: Option<&FocusHandle>, cx: &App) -> AnyElement {
         let Self {
             id,
             label,
-            kind,
             icon,
             enabled,
             is_default: _,
             on_click,
         } = self;
 
-        let Some(focus_handle) = default_focus else {
-            let mut button = match kind {
-                DialogActionKind::Primary => Button::new(id).primary(),
-                DialogActionKind::Outline => Button::new(id).outline(),
-                DialogActionKind::Danger => Button::new(id).danger(),
-            };
-            if let Some(icon) = icon {
-                button = button.icon(icon);
-            }
-            // Fixed size (not rem-scaled) to match the Qt/Breeze geometry.
-            return button
-                .label(label)
-                .h(px(32.))
-                .min_w(px(80.))
-                .disabled(!enabled)
-                .on_click(move |event, window, cx| on_click(event, window, cx))
-                .into_any_element();
-        };
-
-        // Qt's default button owns a caller-provided focus handle so the dialog
-        // can focus it on open. `BaseButton` activates it on pointer, Enter, and
-        // Space, and the `.focus` border is the Breeze focus cue (`theme.ring`).
+        // `BaseButton` activates on pointer, Enter, and Space, and the `.focus`
+        // border is the Breeze focus cue (`theme.ring`). The outline recipe
+        // matches the toolbar and the other dialog buttons.
         let theme = cx.theme();
         let radius = theme.radius;
         let ring = theme.ring;
+        let (border, primary, pressed) =
+            (theme.input, theme.primary, theme.tokens.accent.background);
         let mut button = BaseButton::new(id)
-            .track_focus(focus_handle)
             .h(px(32.))
             .min_w(px(80.))
             .px(px(14.))
             .text_base()
             .rounded(radius)
             .border_1()
+            .border_color(border)
+            .bg(theme.input_background())
+            .text_color(theme.button_foreground)
+            .hover(move |style| style.border_color(primary))
+            .active(move |style| style.bg(pressed).border_color(primary))
             .focus(move |style| style.border_color(ring))
             .disabled(!enabled)
             .on_click(move |event, window, cx| on_click(event, window, cx));
-        match kind {
-            DialogActionKind::Primary => {
-                let (bg, fg, hover, active) = (
-                    theme.primary,
-                    theme.primary_foreground,
-                    theme.primary_hover,
-                    theme.primary_active,
-                );
-                button = button
-                    .bg(bg)
-                    .text_color(fg)
-                    .border_color(bg)
-                    .hover(move |style| style.bg(hover))
-                    .active(move |style| style.bg(active));
-            }
-            DialogActionKind::Outline => {
-                let (border, primary, pressed) =
-                    (theme.input, theme.primary, theme.tokens.accent.background);
-                button = button
-                    .border_color(border)
-                    .bg(theme.input_background())
-                    .text_color(theme.button_foreground)
-                    .hover(move |style| style.border_color(primary))
-                    .active(move |style| style.bg(pressed).border_color(primary));
-            }
-            DialogActionKind::Danger => {
-                let (bg, fg, hover, active) = (
-                    theme.danger,
-                    theme.danger_foreground,
-                    theme.danger_hover,
-                    theme.danger_active,
-                );
-                button = button
-                    .bg(bg)
-                    .text_color(fg)
-                    .border_color(bg)
-                    .hover(move |style| style.bg(hover))
-                    .active(move |style| style.bg(active));
-            }
+        if let Some(focus_handle) = default_focus {
+            button = button.track_focus(focus_handle);
         }
 
         let content = match icon {
@@ -593,17 +526,19 @@ pub fn dialog_text(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// The shared alert body: warning icon plus message text that wraps inside the
-/// dialog instead of relying on the clip.
-pub fn dialog_alert_body(text: impl Into<SharedString>, cx: &App) -> impl IntoElement {
+/// The shared warning body used by destructive confirmations: Qt's large
+/// warning triangle at the left of message text that wraps inside the dialog
+/// instead of relying on the clip.
+pub fn dialog_warning_body(text: impl Into<SharedString>, cx: &App) -> impl IntoElement {
     h_flex()
         .w_full()
         .items_start()
-        .gap_2()
+        .gap_3()
         .child(
-            Icon::new(IconName::CircleAlert)
+            Icon::new(IconName::TriangleAlert)
                 .flex_shrink_0()
-                .text_color(cx.theme().danger),
+                .size(px(56.))
+                .text_color(cx.theme().warning),
         )
         .child(v_flex().flex_1().min_w_0().child(dialog_text(text)))
 }
@@ -621,8 +556,8 @@ mod tests {
     };
 
     use super::{
-        DEFAULT_DIALOG_SIZE, DialogAction, DialogActionKind, DialogContent, DialogHandle,
-        DialogOpenError, dialog_bounds, open_dialog, window_for,
+        DEFAULT_DIALOG_SIZE, DialogAction, DialogContent, DialogHandle, DialogOpenError,
+        dialog_bounds, open_dialog, window_for,
     };
 
     struct ParentView;
@@ -671,11 +606,7 @@ mod tests {
         }
 
         fn actions(&self, _cx: &App) -> Vec<DialogAction> {
-            vec![DialogAction::new(
-                "test-dialog-ok",
-                "Ok",
-                DialogActionKind::Primary,
-            )]
+            vec![DialogAction::new("test-dialog-ok", "Ok")]
         }
 
         fn dismissible(&self, _cx: &App) -> bool {

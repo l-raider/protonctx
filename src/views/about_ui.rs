@@ -56,7 +56,7 @@ impl DialogContent for AboutContent {
         // A neutral OK like Qt's `QMessageBox::about`: focused on open so the
         // standard accent focus border shows, and Enter closes the dialog.
         vec![
-            DialogAction::close("about-ok", "Ok")
+            DialogAction::new("about-ok", "Ok")
                 .icon(IconName::Check)
                 .default_button(),
         ]
