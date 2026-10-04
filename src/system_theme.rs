@@ -248,10 +248,12 @@ pub(crate) fn install_scrollbar_styles(cx: &mut App) {
 /// - KDE selections are solid where gpui-component clamps them to a wash.
 /// - KDE draws menus (and popovers) on the window background; the connector
 ///   fills `popover` with the view background, a step darker in Breeze Dark.
+/// - Breeze separates rows with the alternating row shade; the connector
+///   falls back to the border color, which reads as a bright grid.
 ///
 /// No-op unless the connector installed a native theme.
 pub(crate) fn restore_breeze_traits(cx: &mut App) {
-    let Some((view_background, window_background, accent)) = cx
+    let Some((view_background, window_background, accent, row_separator)) = cx
         .try_global::<native_theme_gpui::NativeTheme>()
         .and_then(|native| native.resolved(cx))
         .map(|resolved| {
@@ -259,6 +261,7 @@ pub(crate) fn restore_breeze_traits(cx: &mut App) {
                 rgba_to_hsla(resolved.defaults.surface_color),
                 rgba_to_hsla(resolved.defaults.background_color),
                 rgba_to_hsla(resolved.defaults.selection_background).opacity(ACCENT_ALPHA),
+                rgba_to_hsla(resolved.list.alternate_row_background),
             )
         })
     else {
@@ -274,6 +277,8 @@ pub(crate) fn restore_breeze_traits(cx: &mut App) {
         theme.selection = theme.selection.alpha(1.);
         theme.tokens.selection = theme.selection.into();
         theme.tokens.table_hover = accent.into();
+        theme.table_row_border = row_separator;
+        theme.tokens.table_row_border = row_separator.into();
     });
 }
 
@@ -507,6 +512,10 @@ mod tests {
             assert_eq!(theme.selection.a, 1.0);
             assert_eq!(theme.tokens.selection.color, theme.selection);
             assert_eq!(theme.tokens.table_hover.color, theme.accent);
+            // Row separators take Breeze's alternate row shade, not the
+            // connector's brighter border-colour fallback.
+            assert_eq!(theme.table_row_border, try_parse_color("#2A2E32").unwrap());
+            assert_eq!(theme.tokens.table_row_border.color, theme.table_row_border);
         });
     }
 
