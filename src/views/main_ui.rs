@@ -252,13 +252,10 @@ impl ProtonctxApp {
         cx: &mut Context<Self>,
     ) {
         let message = message.into();
-        let line = format!("[{}] {}", log::timestamp(), message);
-        let line_len = line.len();
-        let insertion = if self.log_text.is_empty() {
-            line
-        } else {
-            format!("\n{line}")
-        };
+        // Terminate every line, including the last: the trailing empty row
+        // gives the no-wrap pane's horizontal scrollbar a blank strip to
+        // overlay instead of the newest line's descenders.
+        let line = format!("[{}] {}\n", log::timestamp(), message);
 
         let prior_lines = self.log_text.lines().count();
         let at_bottom = self
@@ -268,16 +265,15 @@ impl ProtonctxApp {
             .is_none_or(|range| range.end >= prior_lines);
         let prior_scroll = self.log.read(cx).scroll_offset();
         let end = self.log_text.len();
-        // Byte offset where the appended line starts; the caret is parked
-        // there so a no-wrap pane keeps its left edge instead of chasing a
-        // long line's tail sideways.
-        let line_start = end + insertion.len() - line_len;
-        self.log_text.push_str(&insertion);
+        self.log_text.push_str(&line);
 
         self.log.update(cx, |state, cx| {
             state.set_selected_range(end..end, cx);
-            state.insert(insertion, window, cx);
-            state.set_selected_range(line_start..line_start, cx);
+            state.insert(line, window, cx);
+            // Park the caret at the start of the appended line so a no-wrap
+            // pane keeps its left edge instead of chasing a long line's tail
+            // sideways.
+            state.set_selected_range(end..end, cx);
             // Appending moves the cursor, which keeps the newest line in view.
             // When the user has scrolled up, restore the old offset instead.
             if !at_bottom {
@@ -289,12 +285,14 @@ impl ProtonctxApp {
         let lines = self.log_text.lines().count();
         if lines > MAX_LOG_LINES + TRIM_SLACK {
             let keep_from = lines - MAX_LOG_LINES;
-            let tail = self
-                .log_text
-                .lines()
-                .skip(keep_from)
-                .collect::<Vec<_>>()
-                .join("\n");
+            let tail = format!(
+                "{}\n",
+                self.log_text
+                    .lines()
+                    .skip(keep_from)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
             self.log_text = tail.clone();
             self.log.update(cx, |state, cx| {
                 state.set_value(tail, window, cx);
@@ -1875,7 +1873,7 @@ mod tests {
             );
             assert!(
                 shadow.ends_with(&format!(
-                    "] line {}",
+                    "] line {}\n",
                     super::MAX_LOG_LINES + TRIM_SLACK + 19
                 )),
                 "newest line was trimmed"
