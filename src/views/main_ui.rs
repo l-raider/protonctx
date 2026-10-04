@@ -314,6 +314,7 @@ impl ProtonctxApp {
         self.loading = true;
         self.status_text = "Loading games...".to_string();
         cx.notify();
+        self.append_log("Refreshing games...", window, cx);
 
         // Surface the sandbox mode: inside a Flatpak, launches are routed
         // through `flatpak-spawn --host`.
@@ -642,13 +643,11 @@ impl ProtonctxApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = dialog_ui::open_dialog(
-            window,
-            cx,
-            LaunchErrorContent {
-                message: message.into(),
-            },
-        );
+        let message = message.into();
+        // The dialog is transient; keep the failure in the log viewer so the
+        // history survives after it is dismissed.
+        self.append_log(format!("Launch error: {message}"), window, cx);
+        let _ = dialog_ui::open_dialog(window, cx, LaunchErrorContent { message });
     }
 
     /// Copy the selected game's compatdata (prefix) path, re-resolving the
@@ -1873,6 +1872,35 @@ mod tests {
         .unwrap();
     }
 
+    #[gpui_kit::test]
+    fn refresh_games_logs_an_entry(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| {
+                // The automatic first load is production-only, so the initial
+                // refresh is explicit here; the entry is written before the
+                // scan is spawned.
+                app.refresh_games(window, cx);
+                assert!(
+                    app.log_text.contains("Refreshing games..."),
+                    "refresh was not logged: {:?}",
+                    app.log_text
+                );
+            });
+        })
+        .unwrap();
+    }
+
     #[test]
     fn trim_scroll_offset_follows_or_preserves_the_viewport() {
         // Following: the sentinel is clamped to the tail on paint.
@@ -1963,6 +1991,11 @@ mod tests {
             view.update(cx, |app, cx| {
                 app.show_launch_error("short failure", window, cx);
             });
+            let logged = view.read(cx).log_text.clone();
+            assert!(
+                logged.contains("Launch error: short failure"),
+                "launch error was not logged: {logged:?}"
+            );
         })
         .unwrap();
         assert_eq!(cx.windows().len(), 2, "repeated error stacked windows");
