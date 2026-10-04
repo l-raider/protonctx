@@ -1064,7 +1064,11 @@ impl dialog_ui::DialogContent for LaunchErrorContent {
     }
 
     fn actions(&self, _cx: &App) -> Vec<dialog_ui::DialogAction> {
-        vec![dialog_ui::DialogAction::close("launch-error-close", "OK").icon(IconName::Check)]
+        vec![
+            dialog_ui::DialogAction::close("launch-error-close", "OK")
+                .icon(IconName::Check)
+                .default_button(),
+        ]
     }
 }
 
@@ -1478,6 +1482,77 @@ mod tests {
         .unwrap();
         assert_eq!(cx.windows().len(), 1, "Ok closes the About window");
         assert!(cx.update(|cx| !dialog_ui::is_open("about", cx)));
+    }
+
+    #[gpui_kit::test]
+    fn about_dialog_focuses_ok_and_enter_closes_it(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            Root::new(app, window, cx)
+        });
+
+        cx.update_window(main.into(), |_, window, cx| {
+            window.render_frame(cx);
+            crate::views::about_ui::open_about_dialog(window, cx);
+        })
+        .unwrap();
+
+        let about = dialog_window("about", cx);
+        cx.update_window(about, |_, window, cx| {
+            // The first frame lays out the footer and schedules the focus
+            // hand-off; the next-frame callback performs it, like Qt focusing
+            // its default button on show.
+            window.render_frame(cx);
+            let _ = window.simulate_next_frame(cx);
+            assert!(
+                window.focused(cx).is_some(),
+                "the default Ok button should hold focus"
+            );
+            // Enter activates the focused default button.
+            window.press("enter", cx);
+        })
+        .unwrap();
+
+        assert_eq!(cx.windows().len(), 1, "Enter activated the default Ok");
+        assert!(cx.update(|cx| !dialog_ui::is_open("about", cx)));
+    }
+
+    #[gpui_kit::test]
+    fn launch_error_dialog_focuses_ok_and_enter_closes_it(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(main.into(), |_, window, cx| {
+            window.render_frame(cx);
+            view.update(cx, |app, cx| {
+                app.show_launch_error("Failed to launch winecfg", window, cx);
+            });
+        })
+        .unwrap();
+
+        let error = dialog_window("launch-error", cx);
+        cx.update_window(error, |_, window, cx| {
+            window.render_frame(cx);
+            let _ = window.simulate_next_frame(cx);
+            assert!(
+                window.focused(cx).is_some(),
+                "the default OK button should hold focus"
+            );
+            window.press("enter", cx);
+        })
+        .unwrap();
+
+        assert_eq!(cx.windows().len(), 1, "Enter activated the default OK");
+        assert!(cx.update(|cx| !dialog_ui::is_open("launch-error", cx)));
     }
 
     #[gpui_kit::test]

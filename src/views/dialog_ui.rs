@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
+use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -46,6 +47,7 @@ pub struct DialogAction {
     kind: DialogActionKind,
     icon: Option<IconName>,
     enabled: bool,
+    is_default: bool,
     on_click: DialogClickHandler,
 }
 
@@ -58,6 +60,7 @@ impl DialogAction {
             kind,
             icon: None,
             enabled: true,
+            is_default: false,
             on_click: Box::new(|_, window, _| window.remove_window()),
         }
     }
@@ -65,6 +68,13 @@ impl DialogAction {
     /// An outline action that closes the dialog window (Cancel/Close).
     pub fn close(id: &'static str, label: impl Into<SharedString>) -> Self {
         Self::new(id, label, DialogActionKind::Outline)
+    }
+
+    /// Marks this as the dialog's default button: it takes keyboard focus when
+    /// the dialog opens, so Enter activates it (`QPushButton::setDefault`).
+    pub fn default_button(mut self) -> Self {
+        self.is_default = true;
+        self
     }
 
     /// Prefix the label with an icon.
@@ -83,30 +93,104 @@ impl DialogAction {
         self
     }
 
-    fn into_button(self) -> Button {
+    /// The styled button variant used when the action is not the default.
+    fn into_button(self, default_focus: Option<&FocusHandle>, cx: &App) -> AnyElement {
         let Self {
             id,
             label,
             kind,
             icon,
             enabled,
+            is_default: _,
             on_click,
         } = self;
-        let mut button = match kind {
-            DialogActionKind::Primary => Button::new(id).primary(),
-            DialogActionKind::Outline => Button::new(id).outline(),
-            DialogActionKind::Danger => Button::new(id).danger(),
+
+        let Some(focus_handle) = default_focus else {
+            let mut button = match kind {
+                DialogActionKind::Primary => Button::new(id).primary(),
+                DialogActionKind::Outline => Button::new(id).outline(),
+                DialogActionKind::Danger => Button::new(id).danger(),
+            };
+            if let Some(icon) = icon {
+                button = button.icon(icon);
+            }
+            // Fixed size (not rem-scaled) to match the Qt/Breeze geometry.
+            return button
+                .label(label)
+                .h(px(32.))
+                .min_w(px(80.))
+                .disabled(!enabled)
+                .on_click(move |event, window, cx| on_click(event, window, cx))
+                .into_any_element();
         };
-        if let Some(icon) = icon {
-            button = button.icon(icon);
-        }
-        // Fixed size (not rem-scaled) to match the Qt/Breeze button geometry.
-        button
-            .label(label)
+
+        // Qt's default button owns a caller-provided focus handle so the dialog
+        // can focus it on open. `BaseButton` activates it on pointer, Enter, and
+        // Space, and the `.focus` border is the Breeze focus cue (`theme.ring`).
+        let theme = cx.theme();
+        let radius = theme.radius;
+        let ring = theme.ring;
+        let mut button = BaseButton::new(id)
+            .track_focus(focus_handle)
             .h(px(32.))
             .min_w(px(80.))
+            .px(px(14.))
+            .text_base()
+            .rounded(radius)
+            .border_1()
+            .focus(move |style| style.border_color(ring))
             .disabled(!enabled)
-            .on_click(move |event, window, cx| on_click(event, window, cx))
+            .on_click(move |event, window, cx| on_click(event, window, cx));
+        match kind {
+            DialogActionKind::Primary => {
+                let (bg, fg, hover, active) = (
+                    theme.primary,
+                    theme.primary_foreground,
+                    theme.primary_hover,
+                    theme.primary_active,
+                );
+                button = button
+                    .bg(bg)
+                    .text_color(fg)
+                    .border_color(bg)
+                    .hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(active));
+            }
+            DialogActionKind::Outline => {
+                let (border, primary, pressed) =
+                    (theme.input, theme.primary, theme.tokens.accent.background);
+                button = button
+                    .border_color(border)
+                    .bg(theme.input_background())
+                    .text_color(theme.button_foreground)
+                    .hover(move |style| style.border_color(primary))
+                    .active(move |style| style.bg(pressed).border_color(primary));
+            }
+            DialogActionKind::Danger => {
+                let (bg, fg, hover, active) = (
+                    theme.danger,
+                    theme.danger_foreground,
+                    theme.danger_hover,
+                    theme.danger_active,
+                );
+                button = button
+                    .bg(bg)
+                    .text_color(fg)
+                    .border_color(bg)
+                    .hover(move |style| style.bg(hover))
+                    .active(move |style| style.bg(active));
+            }
+        }
+
+        let content = match icon {
+            Some(icon) => h_flex()
+                .gap_1()
+                .child(Icon::new(icon))
+                .child(label)
+                .into_any_element(),
+            None => div().child(label).into_any_element(),
+        };
+        button.child(content).into_any_element()
     }
 }
 
@@ -134,6 +218,11 @@ pub trait DialogContent: 'static {
 pub struct DialogWindow<C: DialogContent> {
     content: C,
     focus_handle: FocusHandle,
+    /// Caller-owned focus handle for the default action's button, so the dialog
+    /// can focus it on open (Qt's `QPushButton::setDefault`).
+    default_button_focus: FocusHandle,
+    /// Whether the default action has already been given focus (once).
+    default_focused: bool,
 }
 
 impl<C: DialogContent> Render for DialogWindow<C> {
@@ -143,6 +232,15 @@ impl<C: DialogContent> Render for DialogWindow<C> {
         let actions = self.content.actions(cx);
         let body = self.content.body(window, cx);
         let focus_handle = self.focus_handle.clone();
+
+        // Qt opens a dialog with its default button focused, so Enter (or
+        // Space) activates it without tabbing first. Focus is handed over after
+        // the first frame, once the footer has been laid out.
+        if !self.default_focused && actions.iter().any(|action| action.is_default) {
+            self.default_focused = true;
+            let handle = self.default_button_focus.clone();
+            cx.on_next_frame(window, move |_, window, cx| window.focus(&handle, cx));
+        }
 
         v_flex()
             .id("dialog-root")
@@ -168,13 +266,17 @@ impl<C: DialogContent> Render for DialogWindow<C> {
                     .overflow_y_scroll()
                     .child(body),
             )
-            .child(
+            .child({
+                let default_handle = self.default_button_focus.clone();
                 h_flex()
                     .w_full()
                     .justify_end()
                     .gap_2()
-                    .children(actions.into_iter().map(DialogAction::into_button)),
-            )
+                    .children(actions.into_iter().map(move |action| {
+                        let focus = action.is_default.then(|| default_handle.clone());
+                        action.into_button(focus.as_ref(), cx)
+                    }))
+            })
     }
 }
 
@@ -419,7 +521,11 @@ pub fn open_dialog<C: DialogContent>(
         let view = cx.new(|cx| DialogWindow {
             content,
             focus_handle: cx.focus_handle(),
+            default_button_focus: cx.focus_handle(),
+            default_focused: false,
         });
+        // The dialog pane holds focus until the default action claims it on the
+        // next frame; that keeps Esc bound even before a default exists.
         let focus_handle = view.read(cx).focus_handle.clone();
         window.focus(&focus_handle, cx);
 
@@ -440,6 +546,8 @@ pub fn open_dialog<C: DialogContent>(
                     };
                     let _ = weak_view.update(cx, |view, cx| {
                         view.content = *content;
+                        // Replaced content may name a different default action.
+                        view.default_focused = false;
                         cx.notify();
                     });
                 })

@@ -1,9 +1,10 @@
 //! The About dialog, opened from the toolbar menu.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::*;
 
-use crate::views::dialog_ui::{self, DialogAction, DialogActionKind, DialogContent};
+use crate::views::dialog_ui::{self, DialogAction, DialogContent};
 
 /// The app icon path registered by [`crate::assets::AppAssets`].
 const APP_ICON: &str = "icons/protonctx.png";
@@ -52,11 +53,13 @@ impl DialogContent for AboutContent {
     }
 
     fn actions(&self, _cx: &App) -> Vec<DialogAction> {
-        vec![DialogAction::new(
-            "about-ok",
-            "Ok",
-            DialogActionKind::Primary,
-        )]
+        // A neutral OK like Qt's `QMessageBox::about`: focused on open so the
+        // standard accent focus border shows, and Enter closes the dialog.
+        vec![
+            DialogAction::close("about-ok", "Ok")
+                .icon(IconName::Check)
+                .default_button(),
+        ]
     }
 }
 
