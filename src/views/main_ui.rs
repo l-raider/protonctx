@@ -114,7 +114,13 @@ impl ProtonctxApp {
                 .sortable(true)
         });
 
-        let log = cx.new(|cx| TextareaState::new(window, cx));
+        let log = cx.new(|cx| {
+            let mut state = TextareaState::new(window, cx);
+            // Qt's `QPlainTextEdit::NoWrap`: long lines scroll horizontally
+            // instead of wrapping into extra rows.
+            state.set_soft_wrap(false, window, cx);
+            state
+        });
 
         // Selection mirror + column-width sync (P1/P2: never read the leased
         // table from inside its own events; mirror what the root renders).
@@ -247,6 +253,7 @@ impl ProtonctxApp {
     ) {
         let message = message.into();
         let line = format!("[{}] {}", log::timestamp(), message);
+        let line_len = line.len();
         let insertion = if self.log_text.is_empty() {
             line
         } else {
@@ -261,11 +268,16 @@ impl ProtonctxApp {
             .is_none_or(|range| range.end >= prior_lines);
         let prior_scroll = self.log.read(cx).scroll_offset();
         let end = self.log_text.len();
+        // Byte offset where the appended line starts; the caret is parked
+        // there so a no-wrap pane keeps its left edge instead of chasing a
+        // long line's tail sideways.
+        let line_start = end + insertion.len() - line_len;
         self.log_text.push_str(&insertion);
 
         self.log.update(cx, |state, cx| {
             state.set_selected_range(end..end, cx);
             state.insert(insertion, window, cx);
+            state.set_selected_range(line_start..line_start, cx);
             // Appending moves the cursor, which keeps the newest line in view.
             // When the user has scrolled up, restore the old offset instead.
             if !at_bottom {
@@ -1897,6 +1909,42 @@ mod tests {
                     app.log_text
                 );
             });
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn log_pane_scrolls_horizontally_instead_of_wrapping(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+
+        let mut view = None;
+        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
+            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
+            view = Some(app.clone());
+            Root::new(app, window, cx)
+        });
+        let view = view.unwrap();
+
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+
+            // A single line far wider than the pane.
+            view.update(cx, |app, cx| app.append_log("x".repeat(400), window, cx));
+            window.render_frame(cx);
+
+            let log = view.read(cx).log.clone();
+            log.update(cx, |state, cx| {
+                state.set_scroll_offset(point(px(-50.), px(0.)), cx);
+            });
+            window.render_frame(cx);
+
+            // A no-wrap pane has horizontal overflow, so the offset survives;
+            // a wrapping pane has none and clamps it back to zero.
+            let offset = view.read(cx).log.read(cx).scroll_offset();
+            assert!(
+                offset.x < px(0.),
+                "log pane did not scroll horizontally: {offset:?}"
+            );
         })
         .unwrap();
     }
