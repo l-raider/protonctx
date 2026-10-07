@@ -15,11 +15,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, Sizable as _,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
-    h_flex,
+    ActiveTheme as _, Disableable as _, Icon, Sizable as _, h_flex,
     input::TextareaState,
     menu::DropdownMenu as _,
     resizable::{resizable_panel, v_resizable},
@@ -31,11 +28,11 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::games::{GameRow, GamesDelegate, TOOL_BUTTONS, sort_games};
+use crate::games::{GameRow, GamesDelegate, TOOL_BUTTONS, sort_games_by};
 use crate::log;
 use crate::menu;
 use crate::models::Game;
-use crate::views::{about_ui, dialog_ui, logs_ui, settings_ui};
+use crate::views::{about_ui, dialog_ui, logs_ui, settings_ui, widgets};
 use crate::{LogClear, LogCopy, LogSelectAll, RefreshGames};
 
 /// Cap for the log textarea; the oldest lines are trimmed first.
@@ -80,7 +77,7 @@ pub struct ProtonctxApp {
     loading: bool,
     selected_row: Option<usize>,
     status_text: String,
-    pub(crate) remember_last_directory: bool,
+    pub(crate) remember_last_dir: bool,
     launch_running: bool,
     active_launches: usize,
     launch_generation: u64,
@@ -91,7 +88,6 @@ pub struct ProtonctxApp {
     /// callback is already queued.
     repaint_queued: Rc<Cell<bool>>,
     _subscriptions: Vec<Subscription>,
-    _activation_subscription: Subscription,
     _refresh_task: Option<Task<()>>,
     _launch_events_task: Option<Task<()>>,
     _browse_task: Option<Task<()>>,
@@ -163,17 +159,7 @@ impl ProtonctxApp {
                             if let Some(width) = widths.get(1) {
                                 delegate.app_id_width = *width;
                             }
-                            let compat = (viewport_width
-                                - delegate.name_width
-                                - delegate.app_id_width
-                                - px(24.))
-                            .max(px(80.));
-                            if (delegate.compat_width - compat).abs() > px(1.) {
-                                delegate.compat_width = compat;
-                                true
-                            } else {
-                                false
-                            }
+                            delegate.set_compat_width_for_viewport(viewport_width)
                         };
                         if changed {
                             table.refresh(cx);
@@ -202,7 +188,7 @@ impl ProtonctxApp {
             loading: false,
             selected_row: None,
             status_text: "Ready".to_string(),
-            remember_last_directory: crate::config::load_config().remember_last_dir,
+            remember_last_dir: crate::config::load_config().remember_last_dir,
             launch_running: false,
             active_launches: 0,
             launch_generation: 0,
@@ -210,8 +196,7 @@ impl ProtonctxApp {
             viewport_width: None,
             focus_handle,
             repaint_queued: Rc::new(Cell::new(false)),
-            _subscriptions: vec![subscription],
-            _activation_subscription: activation_subscription,
+            _subscriptions: vec![subscription, activation_subscription],
             _refresh_task: None,
             _launch_events_task: None,
             _browse_task: None,
@@ -404,12 +389,7 @@ impl ProtonctxApp {
     }
 
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        settings_ui::open_settings_dialog(
-            self.remember_last_directory,
-            cx.weak_entity(),
-            window,
-            cx,
-        );
+        settings_ui::open_settings_dialog(self.remember_last_dir, cx.weak_entity(), window, cx);
     }
 
     fn open_about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -418,13 +398,13 @@ impl ProtonctxApp {
 
     /// Persist the settings checkbox immediately (the legacy dialog did), and
     /// log the change. Write failures are diagnostics only, as in Qt.
-    pub(crate) fn apply_remember_last_directory(
+    pub(crate) fn apply_remember_last_dir(
         &mut self,
         value: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.remember_last_directory = value;
+        self.remember_last_dir = value;
         self.append_log(
             format!("Settings: remember last directory = {value}"),
             window,
@@ -434,8 +414,8 @@ impl ProtonctxApp {
         let config = crate::config::AppConfig {
             remember_last_dir: value,
         };
-        if let Err(e) = crate::config::save_config(&config) {
-            eprintln!("protonctx: failed to save config: {e}");
+        if let Err(error) = crate::config::save_config(&config) {
+            eprintln!("protonctx: failed to save config: {error}");
         }
     }
 
@@ -445,10 +425,30 @@ impl ProtonctxApp {
         self.table.read(cx).delegate().rows.get(row_ix).cloned()
     }
 
-    /// The currently selected row as a backend [`Game`]. The launcher only
-    /// reads `name`, `app_id`, `library_path`, and `proton_dir`.
-    fn selected_game(&self, cx: &App) -> Option<Game> {
-        let row = self.selected_row_data(cx)?;
+    /// The selected row, surfacing the standard "No game selected" error once.
+    fn require_selected_row(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<GameRow> {
+        match self.selected_row_data(cx) {
+            Some(row) => Some(row),
+            None => {
+                self.show_error("No game selected", window, cx);
+                None
+            }
+        }
+    }
+
+    /// The selected row as a backend [`Game`], surfacing the standard error
+    /// when nothing is selected. The launcher only reads `name`, `app_id`,
+    /// `library_path`, and `proton_dir`.
+    fn require_selected_game(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Game> {
+        let row = self.require_selected_row(window, cx)?;
         Some(Game {
             name: row.name.to_string(),
             app_id: row.app_id,
@@ -460,15 +460,14 @@ impl ProtonctxApp {
 
     /// Launch a built-in Wine tool in the selected game's prefix.
     pub(crate) fn launch_tool(&mut self, tool: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(game) = self.selected_game(cx) else {
-            self.show_launch_error("No game selected", window, cx);
+        let Some(game) = self.require_selected_game(window, cx) else {
             return;
         };
 
         match crate::launcher::launch_tool(&game, tool) {
             Ok(proc) => self.start_launch(proc, format!("Running {tool}..."), window, cx),
             Err(e) => {
-                self.show_launch_error(format!("Failed to launch {tool}: {e}"), window, cx);
+                self.show_error(format!("Failed to launch {tool}: {e}"), window, cx);
             }
         }
     }
@@ -488,7 +487,7 @@ impl ProtonctxApp {
         // Seed the dialog at the last directory when the preference is on;
         // otherwise start at the portal default. The selection is re-resolved
         // after the dialog closes, as Qt does.
-        let initial_dir = if self.remember_last_directory {
+        let initial_dir = if self.remember_last_dir {
             crate::config::load_last_dir()
         } else {
             None
@@ -504,22 +503,18 @@ impl ProtonctxApp {
                 match picked {
                     Ok(Some(path)) => {
                         // Remember the *directory* (not the file) for the next open.
-                        if this.remember_last_directory
+                        if this.remember_last_dir
                             && let Some(parent) = path.parent()
-                            && let Err(e) = crate::config::save_last_dir(parent)
+                            && let Err(error) = crate::config::save_last_dir(parent)
                         {
-                            eprintln!("protonctx: failed to save last directory: {e}");
+                            eprintln!("protonctx: failed to save last directory: {error}");
                         }
                         this.launch_browsed(path, window, cx);
                     }
                     // Portal cancel: no selection is not an error.
                     Err(ashpd::Error::Response(_)) | Ok(None) => {}
                     Err(e) => {
-                        this.show_launch_error(
-                            format!("Failed to open file dialog: {e}"),
-                            window,
-                            cx,
-                        );
+                        this.show_error(format!("Failed to open file dialog: {e}"), window, cx);
                     }
                 }
                 // This completion runs outside the window dispatch, so ask
@@ -530,8 +525,7 @@ impl ProtonctxApp {
     }
 
     fn launch_browsed(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(game) = self.selected_game(cx) else {
-            self.show_launch_error("No game selected", window, cx);
+        let Some(game) = self.require_selected_game(window, cx) else {
             return;
         };
 
@@ -539,7 +533,7 @@ impl ProtonctxApp {
         match crate::launcher::proton::run_in_prefix(&game, &[&display]) {
             Ok(proc) => self.start_launch(proc, format!("Running {display}..."), window, cx),
             Err(e) => {
-                self.show_launch_error(format!("Failed to launch: {e}"), window, cx);
+                self.show_error(format!("Failed to launch: {e}"), window, cx);
             }
         }
     }
@@ -596,13 +590,29 @@ impl ProtonctxApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.finish_launch(
+            generation,
+            format!("Launch error: failed to start watcher: {error}"),
+            window,
+            cx,
+        );
+    }
+
+    /// Apply one launch completion: decrement the counter, republish
+    /// `launch_running`, log `message`, and let the newest launch own the
+    /// status text.
+    fn finish_launch(
+        &mut self,
+        generation: u64,
+        message: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.active_launches = self.active_launches.saturating_sub(1);
         self.launch_running = self.active_launches > 0;
-
-        let message = format!("Launch error: failed to start watcher: {error}");
         self.append_log(message.clone(), window, cx);
         // A newer launch superseded this one for status-text purposes; do not
-        // clobber its message.
+        // clobber its message. Every process still logs its own exit event.
         if generation == self.launch_generation {
             self.status_text = message;
         }
@@ -620,34 +630,21 @@ impl ProtonctxApp {
                 self.append_log(text, window, cx);
             }
             LaunchEvent::Exited { generation, result } => {
-                self.active_launches = self.active_launches.saturating_sub(1);
-                // A newer launch superseded this one for *status text*
-                // purposes; do not clobber its message. Every process still
-                // logs its own exit event.
-                let is_latest = generation == self.launch_generation;
-                let still_running = self.active_launches > 0;
-
                 let finished = match result {
                     Ok(status) => match status.code() {
                         Some(0) => "Exit code: 0".to_string(),
                         Some(code) => format!("Exit code: {code}"),
                         None => "Process terminated by signal".to_string(),
                     },
-                    Err(e) => format!("Launch error: {e}"),
+                    Err(error) => format!("Launch error: {error}"),
                 };
-                self.append_log(finished.clone(), window, cx);
-
-                if is_latest {
-                    self.status_text = finished;
-                }
-                self.launch_running = still_running;
-                cx.notify();
+                self.finish_launch(generation, finished, window, cx);
             }
         }
     }
 
     /// Show a message box carrying the actual failure text.
-    pub(crate) fn show_launch_error(
+    pub(crate) fn show_error(
         &mut self,
         message: impl Into<String>,
         window: &mut Window,
@@ -666,14 +663,11 @@ impl ProtonctxApp {
         let Some(row) = self.selected_row_data(cx) else {
             return;
         };
-        let path = crate::launcher::proton::compat_data_dir_for(
+        let path = crate::steam::paths::app_compatdata_dir(
             std::path::Path::new(&row.library_path),
             row.app_id,
         );
-        let path = path.to_string_lossy().into_owned();
-        if !path.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(path));
-        }
+        Self::copy_to_clipboard(path.to_string_lossy().into_owned(), cx);
     }
 
     /// Copy the selected game's resolved compatibility-tool path.
@@ -681,8 +675,15 @@ impl ProtonctxApp {
         let Some(row) = self.selected_row_data(cx) else {
             return;
         };
-        if !row.proton_dir.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(row.proton_dir));
+        Self::copy_to_clipboard(row.proton_dir, cx);
+    }
+
+    /// Write non-empty `text` to the clipboard; an empty value means there is
+    /// nothing to copy (the two copy-path actions share this rule).
+    fn copy_to_clipboard(text: impl Into<String>, cx: &mut Context<Self>) {
+        let text = text.into();
+        if !text.is_empty() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
 
@@ -731,8 +732,7 @@ impl ProtonctxApp {
         if self.deleting_shader_cache {
             return;
         }
-        let Some(row) = self.selected_row_data(cx) else {
-            self.show_launch_error("No game selected", window, cx);
+        let Some(row) = self.require_selected_row(window, cx) else {
             return;
         };
         self.deleting_shader_cache = true;
@@ -779,11 +779,7 @@ impl ProtonctxApp {
                         // Close the confirm first, then surface the error in its
                         // own Launch Error window.
                         dialog_ui::close_dialog("delete-shader-cache", cx);
-                        this.show_launch_error(
-                            format!("Failed to delete shader cache: {e}"),
-                            window,
-                            cx,
-                        );
+                        this.show_error(format!("Failed to delete shader cache: {e}"), window, cx);
                     }
                 }
                 cx.notify();
@@ -800,11 +796,10 @@ impl ProtonctxApp {
         }
         self.viewport_width = Some(width);
 
-        let delegate = self.table.read(cx).delegate();
-        let compat = (width - delegate.name_width - delegate.app_id_width - px(24.)).max(px(80.));
-
         self.table.update(cx, |state, cx| {
-            state.delegate_mut().compat_width = compat;
+            // Refresh unconditionally after the viewport guard (the width
+            // change itself is what made the cached column stale).
+            let _ = state.delegate_mut().set_compat_width_for_viewport(width);
             state.refresh(cx);
         });
     }
@@ -822,34 +817,33 @@ impl ProtonctxApp {
             // connector exposes the KDE Header background as `list_head`.
             .bg(cx.theme().list_head)
             .child(
-                Button::new("main-menu")
-                    .custom(
-                        ButtonCustomVariant::new(cx)
-                            .color(cx.theme().transparent)
-                            .foreground(cx.theme().primary_foreground)
-                            .hover(cx.theme().primary)
-                            .active(cx.theme().primary),
-                    )
+                widgets::toolbar_icon_button("main-menu", cx)
                     .icon(IconName::Menu)
                     .dropdown_menu(move |menu, window, _cx| {
                         let Some(entity) = weak.upgrade() else {
                             return menu;
                         };
 
-                        menu.item(menu::item("Settings").icon(IconName::Settings).on_click(
-                            window.listener_for(&entity, |app, _, window, cx| {
-                                app.open_settings(window, cx);
-                            }),
+                        menu.item(menu::app_item(
+                            window,
+                            &entity,
+                            "Settings",
+                            Some(IconName::Settings),
+                            |app, window, cx| app.open_settings(window, cx),
                         ))
-                        .item(menu::item("Clear logs").icon(IconName::Eraser).on_click(
-                            window.listener_for(&entity, |app, _, window, cx| {
-                                app.clear_logs(window, cx);
-                            }),
+                        .item(menu::app_item(
+                            window,
+                            &entity,
+                            "Clear logs",
+                            Some(IconName::Eraser),
+                            |app, window, cx| app.clear_logs(window, cx),
                         ))
-                        .item(menu::item("About protonctx").icon(IconName::Info).on_click(
-                            window.listener_for(&entity, |app, _, window, cx| {
-                                app.open_about(window, cx);
-                            }),
+                        .item(menu::app_item(
+                            window,
+                            &entity,
+                            "About protonctx",
+                            Some(IconName::Info),
+                            |app, window, cx| app.open_about(window, cx),
                         ))
                         .separator()
                         .item(
@@ -862,14 +856,7 @@ impl ProtonctxApp {
                     }),
             )
             .child(
-                Button::new("refresh-games")
-                    .custom(
-                        ButtonCustomVariant::new(cx)
-                            .color(cx.theme().transparent)
-                            .foreground(cx.theme().primary_foreground)
-                            .hover(cx.theme().primary)
-                            .active(cx.theme().primary),
-                    )
+                widgets::toolbar_icon_button("refresh-games", cx)
                     .icon(IconName::RefreshCw)
                     .label("Refresh games")
                     .disabled(self.loading)
@@ -923,41 +910,10 @@ impl ProtonctxApp {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        // The styled Button overwrites any caller hover style with its variant
-        // hover (`gpui-component/src/button/button.rs`), so an outline border
-        // hover color only survives while the button is disabled. Use the
-        // unstyled base Button and apply the outline recipe itself.
-        let input = cx.theme().input;
-        let primary = cx.theme().primary;
-        let ring = cx.theme().ring;
-        let radius = cx.theme().radius;
-        let input_bg = cx.theme().input_background();
-        // Qt/Breeze paints the pressed background with the same wash the
-        // context menu uses on hover (`MenuItemElement` → `theme.tokens.accent`).
-        let pressed_bg = cx.theme().tokens.accent.background;
-        let fg = cx.theme().button_foreground;
-        let disabled_fg = cx.theme().muted_foreground.opacity(0.5);
-
-        BaseButton::new(id)
-            .h(px(32.))
-            .px(px(14.))
-            .rounded(radius)
-            .border_1()
-            .text_base()
-            .when(enabled, |this| {
-                this.border_color(input)
-                    .bg(input_bg)
-                    .text_color(fg)
-                    .hover(move |style| style.border_color(primary))
-                    .active(move |style| style.bg(pressed_bg).border_color(primary))
-                    .focus_visible(move |style| style.border_color(ring))
-            })
-            .when(!enabled, |this| {
-                this.border_color(input.opacity(0.5))
-                    .bg(input_bg.opacity(0.5))
-                    .text_color(disabled_fg)
-            })
-            .disabled(!enabled)
+        // The shared outline recipe keeps the action row and the dialog
+        // footers identical; the styled component Button would overwrite a
+        // caller hover style with its variant hover.
+        widgets::outline_button(id, enabled, cx)
             .accessibility_label(label)
             .on_click(cx.listener(move |this, _, window, cx| match tool {
                 Some(tool) => this.launch_tool(tool, window, cx),
@@ -1064,11 +1020,7 @@ impl dialog_ui::DialogContent for LaunchErrorContent {
     }
 
     fn actions(&self, _cx: &App) -> Vec<dialog_ui::DialogAction> {
-        vec![
-            dialog_ui::DialogAction::new("launch-error-close", "OK")
-                .icon(IconName::Check)
-                .default_button(),
-        ]
+        vec![dialog_ui::DialogAction::ok("launch-error-close")]
     }
 }
 
@@ -1293,12 +1245,7 @@ fn discovery_outcome(
     match result {
         Ok(discovery) => {
             let mut rows: Vec<GameRow> = discovery.games.iter().map(GameRow::from_game).collect();
-            match sort_sort {
-                ColumnSort::Ascending => sort_games(&mut rows, sort_column, true),
-                ColumnSort::Descending => sort_games(&mut rows, sort_column, false),
-                // The neutral header state means "discovery order".
-                ColumnSort::Default => {}
-            }
+            sort_games_by(&mut rows, sort_column, sort_sort);
 
             let count = rows.len();
             let status = match count {
@@ -1320,19 +1267,14 @@ fn discovery_outcome(
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::component::{
-        Root,
-        table::{ColumnSort, TableDelegate as _},
-    };
+    use gpui_kit::component::table::{ColumnSort, TableDelegate as _};
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{
         AnyWindowHandle, AppContext as _, Focusable as _, Keystroke, TestAppContext, point, px,
         size,
     };
 
-    use super::{
-        ProtonctxApp, TRIM_SLACK, bind_keys, discovery_outcome, schedule_frame, trim_scroll_offset,
-    };
+    use super::{TRIM_SLACK, bind_keys, discovery_outcome, schedule_frame, trim_scroll_offset};
     use crate::games::GameRow;
     use crate::models::Game;
     use crate::views::dialog_ui;
@@ -1343,14 +1285,15 @@ mod tests {
             .unwrap_or_else(|| panic!("no open {id} dialog window"))
     }
 
+    /// The common two-argument fixture: a known tool and library layout.
     fn test_game(name: &str, app_id: u32) -> Game {
-        Game {
-            name: name.to_string(),
+        crate::test_support::game(
+            name,
             app_id,
-            compat_tool: "proton_experimental".to_string(),
-            library_path: "/lib".to_string(),
-            proton_dir: "/lib/steamapps/common/Proton - Experimental".to_string(),
-        }
+            "proton_experimental",
+            "/lib",
+            "/lib/steamapps/common/Proton - Experimental",
+        )
     }
 
     #[test]
@@ -1410,16 +1353,10 @@ mod tests {
     fn settings_menu_item_opens_dialog_and_ok_closes_it(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
+        let (main, _view) = crate::test_support::open_app(cx);
         let main_id = main.window_id();
-        let _view = view.unwrap();
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             window.click("main-menu", cx);
             window.render_frame(cx);
@@ -1453,13 +1390,10 @@ mod tests {
             crate::system_theme::install_preset(&AccessibilityPreferences::default(), true, cx);
         });
 
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            Root::new(app, window, cx)
-        });
+        let (main, _view) = crate::test_support::open_app(cx);
         let main_id = main.window_id();
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             window.click("main-menu", cx);
             window.render_frame(cx);
@@ -1495,12 +1429,9 @@ mod tests {
     fn about_dialog_focuses_ok_and_enter_closes_it(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            Root::new(app, window, cx)
-        });
+        let (main, _view) = crate::test_support::open_app(cx);
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             crate::views::about_ui::open_about_dialog(window, cx);
         })
@@ -1530,18 +1461,12 @@ mod tests {
     fn launch_error_dialog_focuses_ok_and_enter_closes_it(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
-                app.show_launch_error("Failed to launch winecfg", window, cx);
+                app.show_error("Failed to launch winecfg", window, cx);
             });
         })
         .unwrap();
@@ -1566,15 +1491,9 @@ mod tests {
     fn about_dialog_dedupes_and_cascades(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             view.update(cx, |app, cx| app.open_about(window, cx));
             let first = dialog_ui::window_for("about", cx)
                 .expect("About opens")
@@ -1589,7 +1508,7 @@ mod tests {
 
         assert_eq!(cx.windows().len(), 2, "no duplicate About window");
 
-        cx.update_window(main.into(), |_, window, _| window.remove_window())
+        cx.update_window(main, |_, window, _| window.remove_window())
             .unwrap();
         cx.run_until_parked();
 
@@ -1604,12 +1523,9 @@ mod tests {
     fn about_dialog_exposes_a11y_dialog_role(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            Root::new(app, window, cx)
-        });
+        let (main, _view) = crate::test_support::open_app(cx);
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             crate::views::about_ui::open_about_dialog(window, cx);
         })
@@ -1642,15 +1558,9 @@ mod tests {
 
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             window.click("main-menu", cx);
             window.render_frame(cx);
@@ -1667,7 +1577,7 @@ mod tests {
             // toggling writes `false`.
             window.press("tab", cx);
             window.press("space", cx);
-            assert!(!view.read(cx).remember_last_directory);
+            assert!(!view.read(cx).remember_last_dir);
 
             window.click("settings-ok", cx);
         })
@@ -1684,11 +1594,7 @@ mod tests {
 
     #[test]
     fn settings_persist_config_subprocess() {
-        let config_home = std::env::temp_dir().join(format!(
-            "protonctx-test-xdg-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let config_home = crate::test_support::temp_dir("xdg");
         std::fs::create_dir_all(&config_home).unwrap();
 
         let exe = std::env::current_exe().unwrap();
@@ -1715,15 +1621,9 @@ mod tests {
     fn clear_logs_menu_item_clears_the_log(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             // Seed a line so clearing is observable.
             view.update(cx, |app, cx| {
@@ -1736,7 +1636,7 @@ mod tests {
         })
         .unwrap();
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.press("enter", cx);
             assert!(view.read(cx).log_text.is_empty());
             let log = view.read(cx).log.clone();
@@ -1750,15 +1650,9 @@ mod tests {
         cx.update(gpui_kit::init);
         cx.update(bind_keys);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
                 app.append_log("seed line", window, cx);
@@ -1782,15 +1676,9 @@ mod tests {
         cx.update(gpui_kit::init);
         cx.update(bind_keys);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
                 app.append_log("seed line", window, cx);
@@ -1810,15 +1698,9 @@ mod tests {
         cx.update(gpui_kit::init);
         cx.update(bind_keys);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
                 app.append_log("seed line", window, cx);
@@ -1847,15 +1729,9 @@ mod tests {
     fn schedule_frame_is_single_flight(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             // Drain anything queued during window construction.
             let _ = window.simulate_next_frame(cx);
 
@@ -1891,15 +1767,9 @@ mod tests {
     fn watcher_spawn_failure_clears_launch_state(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
                 app.active_launches = 1;
@@ -1926,15 +1796,9 @@ mod tests {
     fn append_log_caps_line_count(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             for line in 0..super::MAX_LOG_LINES + TRIM_SLACK + 20 {
                 view.update(cx, |app, cx| {
                     app.append_log(format!("line {line}"), window, cx);
@@ -1968,15 +1832,9 @@ mod tests {
     fn refresh_games_logs_an_entry(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
                 // The automatic first load is production-only, so the initial
@@ -1997,15 +1855,9 @@ mod tests {
     fn log_pane_scrolls_horizontally_instead_of_wrapping(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (handle, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
 
             // A single line far wider than the pane.
@@ -2061,21 +1913,15 @@ mod tests {
     fn launch_error_dialog_wraps_long_messages(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
         let long = "Failed to launch /home/user/.local/share/Steam/steamapps/common/\
                     Proton - Experimental/files/bin/wine64 with a very long argument list"
             .repeat(2);
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| {
-                app.show_launch_error(long.clone(), window, cx);
+                app.show_error(long.clone(), window, cx);
             });
         })
         .unwrap();
@@ -2115,9 +1961,9 @@ mod tests {
 
         // A second error replaces the message in the same window instead of
         // stacking another one.
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             view.update(cx, |app, cx| {
-                app.show_launch_error("short failure", window, cx);
+                app.show_error("short failure", window, cx);
             });
             let logged = view.read(cx).log_text.clone();
             assert!(
@@ -2144,22 +1990,12 @@ mod tests {
     fn delete_shader_cache_dialog_closes_after_deletion(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let root = std::env::temp_dir().join(format!(
-            "protonctx-test-delete-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let root = crate::test_support::temp_dir("delete");
         let app_id = 274190;
         let cache = crate::steam::shadercache::shader_cache_dir_for(&root, app_id);
         std::fs::create_dir_all(cache.join("fozpipelinesv6")).unwrap();
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
         let mut game = test_game("Cache Test", app_id);
         game.library_path = root.to_string_lossy().into_owned();
@@ -2172,7 +2008,7 @@ mod tests {
             app.selected_row = Some(0);
         });
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| app.confirm_delete_shader_cache(window, cx));
         })
@@ -2226,13 +2062,7 @@ mod tests {
     fn delete_shader_cache_failure_closes_confirm_and_opens_error(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
         // A relative library path is rejected by the shadercache guard, so the
         // background deletion returns `Err` without touching the filesystem.
@@ -2247,7 +2077,7 @@ mod tests {
             app.selected_row = Some(0);
         });
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             view.update(cx, |app, cx| app.confirm_delete_shader_cache(window, cx));
         })
@@ -2278,15 +2108,9 @@ mod tests {
     fn delete_shader_cache_is_single_flight(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
 
             // Without a selection the guard falls through to the existing
@@ -2321,13 +2145,7 @@ mod tests {
             crate::theme::init(cx);
         });
 
-        let mut view = None;
-        let _handle = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let _view = view.unwrap();
+        let (_handle, _view) = crate::test_support::open_app(cx);
 
         // The static startup theme is never replaced by the platform
         // appearance, which on Linux starts as Light until the portal answers.
@@ -2343,13 +2161,7 @@ mod tests {
     fn header_click_toggles_two_state_sort(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
 
-        let mut view = None;
-        let main = cx.open_window(size(px(760.), px(520.)), |window, cx| {
-            let app = cx.new(|cx| ProtonctxApp::new(window, cx));
-            view = Some(app.clone());
-            Root::new(app, window, cx)
-        });
-        let view = view.unwrap();
+        let (main, view) = crate::test_support::open_app(cx);
 
         view.update(cx, |app, cx| {
             app.table.update(cx, |table, _| {
@@ -2376,7 +2188,7 @@ mod tests {
             };
 
         // Click 1: active column's header body centre -> Descending.
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.render_frame(cx);
             window.click(("col-header", 0usize), cx);
         })
@@ -2384,7 +2196,7 @@ mod tests {
         assert_sorted(cx, 0, ColumnSort::Descending, &[204360, 274190]);
 
         // Click 2: indicator area of the active column -> one click, one step.
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             let header = window.find(("col-header", 0usize));
             let offset = point(header.bounds().size.width - px(10.), px(16.));
             window.click_at(("col-header", 0usize), offset, cx);
@@ -2393,21 +2205,21 @@ mod tests {
         assert_sorted(cx, 0, ColumnSort::Ascending, &[274190, 204360]);
 
         // Click 3: a newly clicked column starts ascending (Qt default).
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.click(("col-header", 1usize), cx);
         })
         .unwrap();
         assert_sorted(cx, 1, ColumnSort::Ascending, &[204360, 274190]);
 
         // Click 4: further clicks on the active column toggle direction.
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.click(("col-header", 1usize), cx);
         })
         .unwrap();
         assert_sorted(cx, 1, ColumnSort::Descending, &[274190, 204360]);
 
         // Click 5: returning to a column restarts ascending, not a stale toggle.
-        cx.update_window(main.into(), |_, window, cx| {
+        cx.update_window(main, |_, window, cx| {
             window.click(("col-header", 0usize), cx);
         })
         .unwrap();

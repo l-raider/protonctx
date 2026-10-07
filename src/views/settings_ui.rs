@@ -1,10 +1,9 @@
 //! The Settings dialog, opened from the toolbar menu.
 //!
-//! The checkbox is bound to the root's `remember_last_directory` and persists
+//! The checkbox is bound to the root's `remember_last_dir` and persists
 //! immediately on change (the legacy Qt dialog did the same), so the value
 //! survives even if the app is killed before exit.
 
-use gpui_kit::assets::IconName;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::*;
 
@@ -18,8 +17,8 @@ use crate::views::main_ui::ProtonctxApp;
 struct SettingsContent {
     app: WeakEntity<ProtonctxApp>,
     /// The main window: the change handler must run with *its* window, because
-    /// `apply_remember_last_directory` appends to the log pane and schedules
-    /// the frame on the owning window (not on this dialog).
+    /// `apply_remember_last_dir` appends to the log pane and schedules the
+    /// frame on the owning window (not on this dialog).
     main: AnyWindowHandle,
     checked: bool,
 }
@@ -48,7 +47,7 @@ impl DialogContent for SettingsContent {
             .checked(checked)
             .on_change(move |value, _window, cx| {
                 let _ = dialog_ui::with_window_and_entity(main, &app, cx, |app, window, cx| {
-                    app.apply_remember_last_directory(*value, window, cx);
+                    app.apply_remember_last_dir(*value, window, cx);
                 });
                 let _ = dialog_ui::update_dialog_content::<SettingsContent>(
                     "settings",
@@ -62,11 +61,7 @@ impl DialogContent for SettingsContent {
     fn actions(&self, _cx: &App) -> Vec<DialogAction> {
         // Qt's settings dialog had a single Close button; changes persist as
         // they are made, so OK just dismisses and is the keyboard default.
-        vec![
-            DialogAction::new("settings-ok", "OK")
-                .icon(IconName::Check)
-                .default_button(),
-        ]
+        vec![DialogAction::ok("settings-ok")]
     }
 }
 

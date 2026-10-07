@@ -22,6 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use super::SteamError;
+use super::paths;
 
 /// Suffix that marks the `default_pfx` line inside a Proton `dist` directory.
 const DEFAULT_PFX_SUFFIX: &str = "/files/share/default_pfx/";
@@ -56,11 +57,7 @@ pub fn proton_dir_for(library: &Path, app_id: u32) -> Result<Option<PathBuf>, St
 /// while a genuine I/O failure (e.g. permission denied) is propagated as an error
 /// rather than silently swallowed.
 fn read_lines(library: &Path, app_id: u32) -> Result<Option<Vec<String>>, SteamError> {
-    let config_info = library
-        .join("steamapps")
-        .join("compatdata")
-        .join(app_id.to_string())
-        .join("config_info");
+    let config_info = paths::app_compatdata_dir(library, app_id).join("config_info");
 
     if !config_info.is_file() {
         return Ok(None);
@@ -85,7 +82,7 @@ mod tests {
 
     #[test]
     fn resolves_builtin_proton_dir() {
-        let dir = std::env::temp_dir().join(format!("protonctx_test_cd_{}", std::process::id()));
+        let dir = crate::test_support::temp_dir("cd");
         let proton = dir
             .join("steamapps")
             .join("common")
@@ -107,8 +104,7 @@ mod tests {
 
     #[test]
     fn none_when_no_prefix() {
-        let dir =
-            std::env::temp_dir().join(format!("protonctx_test_cd_none_{}", std::process::id()));
+        let dir = crate::test_support::temp_dir("cd_none");
         std::fs::create_dir_all(&dir).unwrap();
         assert!(proton_dir_for(&dir, 999999).unwrap().is_none());
         std::fs::remove_dir_all(&dir).ok();

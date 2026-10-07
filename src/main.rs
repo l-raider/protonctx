@@ -19,8 +19,11 @@ mod menu;
 mod models;
 mod steam;
 mod system_theme;
+#[cfg(test)]
+mod test_support;
 mod theme;
 mod views;
+mod xdg;
 
 use gpui_kit::*;
 

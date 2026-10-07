@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use steam_vdf_parser::parse_text;
 
 use super::SteamError;
+use super::paths;
 
 /// Return the absolute paths of every Steam library folder listed in `libraryfolders.vdf`.
 ///
@@ -12,8 +13,8 @@ use super::SteamError;
 /// canonical `libraryfolders.vdf` lives at `<steam_root>/config/libraryfolders.vdf` on
 /// modern Steam, but historically it also appears directly under `<steam_root>/steamapps/`.
 pub fn library_folders(steam_root: &Path) -> Result<Vec<PathBuf>, SteamError> {
-    let config_vdf = steam_root.join("config").join("libraryfolders.vdf");
-    let steamapps_vdf = steam_root.join("steamapps").join("libraryfolders.vdf");
+    let config_vdf = steam_root.join("config").join(paths::LIBRARYFOLDERS_VDF);
+    let steamapps_vdf = paths::steamapps_dir(steam_root).join(paths::LIBRARYFOLDERS_VDF);
 
     let path = if config_vdf.is_file() {
         config_vdf
@@ -66,7 +67,7 @@ mod tests {
 
     #[test]
     fn parses_typical_libraryfolders_vdf() {
-        let dir = std::env::temp_dir().join(format!("protonctx_test_lf_{}", std::process::id()));
+        let dir = crate::test_support::temp_dir("lf");
         let lib_a = dir.join("Steam");
         let lib_b = dir.join("games");
         std::fs::create_dir_all(&lib_a).unwrap();

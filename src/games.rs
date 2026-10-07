@@ -9,7 +9,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{
     ActiveTheme as _, Icon,
-    menu::{PopupMenu, PopupMenuItem},
+    menu::PopupMenu,
     table::{Column, ColumnSort, TableDelegate, TableState},
 };
 use gpui_kit::prelude::FluentBuilder as _;
@@ -97,6 +97,15 @@ pub fn sort_games(rows: &mut [GameRow], column: usize, ascending: bool) {
     }
 }
 
+/// Apply a `ColumnSort` state to `rows`; `Default` leaves discovery order.
+pub fn sort_games_by(rows: &mut [GameRow], column: usize, sort: ColumnSort) {
+    match sort {
+        ColumnSort::Ascending => sort_games(rows, column, true),
+        ColumnSort::Descending => sort_games(rows, column, false),
+        ColumnSort::Default => {}
+    }
+}
+
 /// Next sort direction when the active column's header is clicked.
 ///
 /// Two-state toggle, matching Qt's default header behavior
@@ -111,21 +120,6 @@ pub fn next_sort(current: ColumnSort) -> ColumnSort {
 
 pub fn find_by_app_id(rows: &[GameRow], app_id: u32) -> Option<usize> {
     rows.iter().position(|row| row.app_id == app_id)
-}
-
-/// Build a popup-menu item whose click handler runs on the root app entity.
-fn app_menu_item(
-    window: &Window,
-    entity: &Entity<ProtonctxApp>,
-    label: impl Into<SharedString>,
-    handler: impl Fn(&mut ProtonctxApp, &mut Window, &mut Context<ProtonctxApp>) + 'static,
-) -> PopupMenuItem {
-    crate::menu::item(label).on_click(window.listener_for(
-        entity,
-        move |app, _: &ClickEvent, window, cx| {
-            handler(app, window, cx);
-        },
-    ))
 }
 
 pub struct GamesDelegate {
@@ -168,6 +162,15 @@ impl GamesDelegate {
         self.selected_app_id = row
             .and_then(|row_ix| self.rows.get(row_ix))
             .map(|row| row.app_id);
+    }
+
+    /// Width of the flexible compat column for `viewport`; returns whether it
+    /// changed by more than the 1 px refresh-loop guard.
+    pub fn set_compat_width_for_viewport(&mut self, viewport: Pixels) -> bool {
+        let compat = (viewport - self.name_width - self.app_id_width - px(24.)).max(px(80.));
+        let changed = (self.compat_width - compat).abs() > px(1.);
+        self.compat_width = compat;
+        changed
     }
 
     /// Header sort indicator: a solid arrow on the sorted column, an invisible
@@ -236,11 +239,7 @@ impl TableDelegate for GamesDelegate {
         self.sort_column = col_ix;
         self.sort_sort = sort;
 
-        match sort {
-            ColumnSort::Ascending => sort_games(&mut self.rows, col_ix, true),
-            ColumnSort::Descending => sort_games(&mut self.rows, col_ix, false),
-            ColumnSort::Default => {}
-        }
+        sort_games_by(&mut self.rows, col_ix, sort);
 
         if let Some(app_id) = keep
             && let Some(row_ix) = find_by_app_id(&self.rows, app_id)
@@ -349,10 +348,11 @@ impl TableDelegate for GamesDelegate {
         });
 
         let mut menu = menu
-            .item(app_menu_item(
+            .item(crate::menu::app_item(
                 window,
                 &entity,
                 "Browse for executable...",
+                None,
                 |app, window, cx| app.browse_for_executable(window, cx),
             ))
             .separator();
@@ -360,10 +360,11 @@ impl TableDelegate for GamesDelegate {
         // Build the tool items from the shared table so the toolbar and this
         // menu cannot drift apart.
         for (_, label, tool) in TOOL_BUTTONS {
-            menu = menu.item(app_menu_item(
+            menu = menu.item(crate::menu::app_item(
                 window,
                 &entity,
                 label,
+                None,
                 move |app, window, cx| {
                     app.launch_tool(tool, window, cx);
                 },
@@ -371,23 +372,29 @@ impl TableDelegate for GamesDelegate {
         }
 
         menu.separator()
-            .item(app_menu_item(
+            .item(crate::menu::app_item(
                 window,
                 &entity,
                 "Copy compatdata path",
+                None,
                 |app, _, cx| app.copy_compat_data_path(cx),
             ))
-            .item(app_menu_item(
+            .item(crate::menu::app_item(
                 window,
                 &entity,
                 "Copy compatibility tool path",
+                None,
                 |app, _, cx| app.copy_compatibility_tool_path(cx),
             ))
             .separator()
             .item(
-                app_menu_item(window, &entity, "Delete Shader Cache", |app, window, cx| {
-                    app.confirm_delete_shader_cache(window, cx)
-                })
+                crate::menu::app_item(
+                    window,
+                    &entity,
+                    "Delete Shader Cache",
+                    None,
+                    |app, window, cx| app.confirm_delete_shader_cache(window, cx),
+                )
                 .disabled(!cache_exists),
             )
     }
@@ -396,24 +403,10 @@ impl TableDelegate for GamesDelegate {
 #[cfg(test)]
 mod tests {
     use super::{
-        ColumnSort, Game, GameRow, display_compat_tool, find_by_app_id, next_sort, sort_games,
+        ColumnSort, GameRow, display_compat_tool, find_by_app_id, next_sort, sort_games,
+        sort_games_by,
     };
-
-    fn game(
-        name: &str,
-        app_id: u32,
-        compat_tool: &str,
-        library_path: &str,
-        proton_dir: &str,
-    ) -> Game {
-        Game {
-            name: name.to_string(),
-            app_id,
-            compat_tool: compat_tool.to_string(),
-            library_path: library_path.to_string(),
-            proton_dir: proton_dir.to_string(),
-        }
-    }
+    use crate::test_support::game;
 
     fn fixtures() -> Vec<GameRow> {
         vec![
@@ -580,6 +573,22 @@ mod tests {
         let mut rows = case_insensitive_fixtures();
         sort_games(&mut rows, 9, true);
         assert_eq!(fixture_ids(&rows), vec![40, 20, 30, 10]);
+    }
+
+    #[test]
+    fn sort_games_by_dispatches_the_column_sort_state() {
+        let mut rows = fixtures();
+
+        sort_games_by(&mut rows, 1, ColumnSort::Ascending);
+        assert_eq!(fixture_ids(&rows), vec![204360, 274190, 336060]);
+        sort_games_by(&mut rows, 1, ColumnSort::Descending);
+        assert_eq!(fixture_ids(&rows), vec![336060, 274190, 204360]);
+
+        // `Default` is the neutral header state: discovery order is preserved.
+        let mut rows = fixtures();
+        let before = names(&rows);
+        sort_games_by(&mut rows, 1, ColumnSort::Default);
+        assert_eq!(names(&rows), before);
     }
 
     #[test]

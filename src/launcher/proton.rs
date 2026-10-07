@@ -29,7 +29,10 @@ pub fn run_in_prefix(game: &Game, args: &[&str]) -> Result<LaunchedProcess, Laun
     let root = steam_root_for(game);
     // Proton prefixes (compatdata) live under the library the game is installed in,
     // NOT the Steam root: a game on a secondary library keeps its prefix there.
-    let compat_data = compat_data_dir_for(std::path::Path::new(&game.library_path), game.app_id);
+    let compat_data = crate::steam::paths::app_compatdata_dir(
+        std::path::Path::new(&game.library_path),
+        game.app_id,
+    );
 
     // Inside a Flatpak sandbox the `proton` script lives on the *host* and must be
     // run there via `flatpak-spawn --host` (see `crate::flatpak`). On a normal host
@@ -172,34 +175,22 @@ fn flatpak_spawn_command(
 /// As a pragmatic fallback (when derivation fails), the environment's `HOME`-based default
 /// `~/.local/share/Steam` is used, then finally `game.library_path`.
 ///
-/// This is the single source of truth for Steam-root resolution, shared with
-/// `AppBackend::compat_data_path()` so the "Copy compatdata path" UI always matches the
-/// path a launch actually uses.
+/// This is the single source of truth for Steam-root resolution, shared with the
+/// "Copy compatdata path" UI so the path it shows always matches the path a launch
+/// actually uses.
 pub fn steam_root_for(game: &Game) -> std::path::PathBuf {
     if let Some(root) = steam_root_from_proton_dir(&game.proton_dir) {
         return root;
     }
 
-    if let Some(home) = std::env::var_os("HOME") {
-        let default = std::path::PathBuf::from(home).join(".local/share/Steam");
-        if default.is_dir() {
-            return default;
-        }
+    if let Some(default) =
+        crate::xdg::home_dir().map(|home| home.join(crate::steam::locations::DEFAULT_ROOT))
+        && default.is_dir()
+    {
+        return default;
     }
 
     std::path::PathBuf::from(&game.library_path)
-}
-
-/// The compatdata (prefix) directory for an app, under the library it is installed in.
-///
-/// Proton prefixes live under the *library*'s `steamapps/compatdata/` (Steam creates the
-/// prefix next to the game install, so a game on a secondary library keeps its prefix
-/// there, not under the Steam root).
-pub fn compat_data_dir_for(library: &std::path::Path, app_id: u32) -> std::path::PathBuf {
-    library
-        .join("steamapps")
-        .join("compatdata")
-        .join(app_id.to_string())
 }
 
 /// Derive the Steam root from a Proton directory path.
@@ -213,11 +204,11 @@ fn steam_root_from_proton_dir(proton_dir: &str) -> Option<std::path::PathBuf> {
 
     // Walk up to find a directory named `common` or `compatibilitytools.d`.
     while let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-        if name == "common" {
+        if name == crate::steam::paths::COMMON {
             // common -> steamapps -> steam root
             return path.parent()?.parent().map(|p| p.to_path_buf());
         }
-        if name == "compatibilitytools.d" {
+        if name == crate::steam::paths::COMPATIBILITYTOOLS_D {
             return path.parent().map(|p| p.to_path_buf());
         }
         path = path.parent()?;

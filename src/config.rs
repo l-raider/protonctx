@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::xdg;
+
 /// The application's name, used for the `protonctx` subdirectory under each XDG root.
 const APP_DIR: &str = "protonctx";
 
@@ -40,45 +42,21 @@ impl Default for AppConfig {
 
 /// Transient per-user state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppState {
     /// The absolute path of the last directory picked in the "Browse…" dialog, or
     /// `None` if none has been recorded yet.
     pub last_dir: Option<String>,
 }
 
-/// Return the home directory, if it can be determined.
-///
-/// Mirrors `home_dir` in `crate::steam::locations` so the whole crate resolves the
-/// home directory the same way (honouring `$HOME`).
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-}
-
-/// Resolve an XDG base directory for the given environment variable, falling back to
-/// the given `$HOME`-relative suffix when the variable is unset or empty.
-///
-/// `$XDG_CONFIG_HOME` and `$XDG_STATE_HOME` must be treated as *absolute* paths per the
-/// spec; a relative value is ignored in favour of the default.
-fn xdg_dir(env_var: &str, home_fallback: &str) -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os(env_var) {
-        let dir = PathBuf::from(dir);
-        if dir.is_absolute() && !dir.as_os_str().is_empty() {
-            return Some(dir);
-        }
-    }
-    home_dir().map(|home| home.join(home_fallback))
-}
-
 /// The directory that holds the config file, per XDG (default `~/.config`).
 fn config_dir() -> Option<PathBuf> {
-    xdg_dir("XDG_CONFIG_HOME", ".config")
+    xdg::xdg_dir("XDG_CONFIG_HOME", ".config")
 }
 
 /// The directory that holds the state file, per XDG (default `~/.local/state`).
 fn state_dir() -> Option<PathBuf> {
-    xdg_dir("XDG_STATE_HOME", ".local/state")
+    xdg::xdg_dir("XDG_STATE_HOME", ".local/state")
 }
 
 /// The absolute path of the JSON config file, or `None` if it cannot be resolved.
@@ -102,14 +80,14 @@ pub fn load_config() -> AppConfig {
     serde_json::from_str(&text).unwrap_or_default()
 }
 
-/// Persist the user configuration. Returns `Ok(())` when written, and a best-effort
-/// `Err` (carrying a human-readable reason) when the file could not be written.
-pub fn save_config(config: &AppConfig) -> Result<(), String> {
+/// Persist the user configuration. Returns `Ok(())` when written; an `Err`
+/// carries the I/O reason for the caller to prefix with its own context.
+pub fn save_config(config: &AppConfig) -> std::io::Result<()> {
     let Some(path) = config_path() else {
-        return Err("could not resolve config directory".to_string());
+        return Err(std::io::Error::other("could not resolve config directory"));
     };
-    let text = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    write_atomic(&path, &text).map_err(|e| format!("write config: {e}"))
+    let text = serde_json::to_string_pretty(config).map_err(std::io::Error::other)?;
+    write_atomic(&path, &text)
 }
 
 /// Load the remembered last directory, or `None` if unset/unreadable.
@@ -123,16 +101,17 @@ pub fn load_last_dir() -> Option<PathBuf> {
         .map(|s| decode_dir(&s))
 }
 
-/// Persist the remembered last directory. Best-effort; an `Err` carries a reason.
-pub fn save_last_dir(dir: &Path) -> Result<(), String> {
+/// Persist the remembered last directory. Best-effort; an `Err` carries the I/O
+/// reason for the caller to prefix with its own context.
+pub fn save_last_dir(dir: &Path) -> std::io::Result<()> {
     let Some(path) = state_path() else {
-        return Err("could not resolve state directory".to_string());
+        return Err(std::io::Error::other("could not resolve state directory"));
     };
     let state = AppState {
         last_dir: Some(encode_dir(dir)),
     };
-    let text = serde_json::to_string_pretty(&state).map_err(|e| e.to_string())?;
-    write_atomic(&path, &text).map_err(|e| format!("write state: {e}"))
+    let text = serde_json::to_string_pretty(&state).map_err(std::io::Error::other)?;
+    write_atomic(&path, &text)
 }
 
 /// Encode a directory path for storage in `state.json` without loss.

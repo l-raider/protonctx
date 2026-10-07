@@ -1,6 +1,5 @@
 //! The About dialog, opened from the toolbar menu.
 
-use gpui_kit::assets::IconName;
 use gpui_kit::component::{ActiveTheme as _, v_flex};
 use gpui_kit::*;
 
@@ -55,11 +54,7 @@ impl DialogContent for AboutContent {
     fn actions(&self, _cx: &App) -> Vec<DialogAction> {
         // A neutral OK like Qt's `QMessageBox::about`: focused on open so the
         // standard accent focus border shows, and Enter closes the dialog.
-        vec![
-            DialogAction::new("about-ok", "Ok")
-                .icon(IconName::Check)
-                .default_button(),
-        ]
+        vec![DialogAction::ok("about-ok")]
     }
 }
 

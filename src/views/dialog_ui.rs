@@ -15,7 +15,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::base::Button as BaseButton;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, WindowExt as _, h_flex, notification::Notification, v_flex,
 };
@@ -59,6 +58,11 @@ impl DialogAction {
         self
     }
 
+    /// The standard single-OK action: check icon, keyboard-default.
+    pub fn ok(id: &'static str) -> Self {
+        Self::new(id, "OK").icon(IconName::Check).default_button()
+    }
+
     /// Prefix the label with an icon.
     pub fn icon(mut self, icon: IconName) -> Self {
         self.icon = Some(icon);
@@ -88,28 +92,13 @@ impl DialogAction {
             on_click,
         } = self;
 
-        // `BaseButton` activates on pointer, Enter, and Space, and the `.focus`
-        // border is the Breeze focus cue (`theme.ring`). The outline recipe
-        // matches the toolbar and the other dialog buttons.
-        let theme = cx.theme();
-        let radius = theme.radius;
-        let ring = theme.ring;
-        let (border, primary, pressed) =
-            (theme.input, theme.primary, theme.tokens.accent.background);
-        let mut button = BaseButton::new(id)
-            .h(px(32.))
-            .min_w(px(80.))
-            .px(px(14.))
-            .text_base()
-            .rounded(radius)
-            .border_1()
-            .border_color(border)
-            .bg(theme.input_background())
-            .text_color(theme.button_foreground)
-            .hover(move |style| style.border_color(primary))
-            .active(move |style| style.bg(pressed).border_color(primary))
+        // The shared outline recipe keeps dialog buttons identical to the
+        // action row. `BaseButton` activates on pointer, Enter, and Space; the
+        // extra `.focus` (as opposed to `.focus_visible`) border is the Breeze
+        // cue shown when the dialog focuses its default button on open.
+        let ring = cx.theme().ring;
+        let mut button = crate::views::widgets::outline_button(id, enabled, cx)
             .focus(move |style| style.border_color(ring))
-            .disabled(!enabled)
             .on_click(move |event, window, cx| on_click(event, window, cx));
         if let Some(focus_handle) = default_focus {
             button = button.track_focus(focus_handle);
@@ -407,7 +396,8 @@ pub(crate) fn dialog_bounds(
 ///
 /// A second call with a live id activates the existing window and replaces its
 /// content instead of stacking a duplicate. Failures are reported on `parent`
-/// as a notification and returned to the caller so destructive flows can abort.
+/// as a notification and returned to the caller; callers currently rely on the
+/// notification and ignore the result.
 pub fn open_dialog<C: DialogContent>(
     parent: &mut Window,
     cx: &mut App,
@@ -508,8 +498,8 @@ pub fn open_dialog<C: DialogContent>(
             );
             Ok(DialogHandle { handle })
         }
-        Err(err) => {
-            let message = format!("protonctx: failed to open {id} dialog: {err}");
+        Err(error) => {
+            let message = format!("protonctx: failed to open {id} dialog: {error}");
             eprintln!("{message}");
             parent.push_notification(Notification::error(message.clone()), cx);
             Err(DialogOpenError(message))

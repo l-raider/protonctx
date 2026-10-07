@@ -103,10 +103,7 @@ fn app_id_for(
 fn desktop_entry_installed(id: &str) -> bool {
     let file = format!("{id}.desktop");
 
-    let user_data = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
+    let user_data = crate::xdg::xdg_dir("XDG_DATA_HOME", ".local/share");
     if user_data.is_some_and(|dir| dir.join("applications").join(&file).is_file()) {
         return true;
     }

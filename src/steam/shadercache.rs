@@ -14,10 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-/// The `steamapps` directory name under a library root.
-const STEAMAPPS: &str = "steamapps";
-/// The `shadercache` directory name under `steamapps`.
-const SHADERCACHE: &str = "shadercache";
+use super::paths;
 
 /// The shader-cache directory for an app: `<library>/steamapps/shadercache/<app_id>`.
 ///
@@ -26,10 +23,7 @@ const SHADERCACHE: &str = "shadercache";
 /// [`super::compatdata::proton_dir_for`]. The returned path is not guaranteed to
 /// exist: a game that has never run under Proton has no cache yet.
 pub fn shader_cache_dir_for(library: &Path, app_id: u32) -> PathBuf {
-    library
-        .join(STEAMAPPS)
-        .join(SHADERCACHE)
-        .join(app_id.to_string())
+    paths::app_shadercache_dir(library, app_id)
 }
 
 /// Remove an app's shader-cache directory.
@@ -95,14 +89,14 @@ fn is_shader_cache_dir(dir: &Path, app_id: u32) -> bool {
     let Some(cache) = dir.parent() else {
         return false;
     };
-    if cache.file_name().and_then(|n| n.to_str()) != Some(SHADERCACHE) {
+    if cache.file_name().and_then(|n| n.to_str()) != Some(paths::SHADERCACHE) {
         return false;
     }
 
     let Some(steamapps) = cache.parent() else {
         return false;
     };
-    steamapps.file_name().and_then(|n| n.to_str()) == Some(STEAMAPPS)
+    steamapps.file_name().and_then(|n| n.to_str()) == Some(paths::STEAMAPPS)
 }
 
 #[cfg(test)]
@@ -168,8 +162,7 @@ mod tests {
 
     #[test]
     fn delete_removes_existing_cache() {
-        let root =
-            std::env::temp_dir().join(format!("protonctx_test_shadercache_{}", std::process::id()));
+        let root = crate::test_support::temp_dir("shadercache");
         let cache = shader_cache_dir_for(&root, 274190);
         std::fs::create_dir_all(cache.join("fozpipelinesv6")).unwrap();
 
@@ -181,10 +174,7 @@ mod tests {
 
     #[test]
     fn delete_reports_nothing_to_do_when_absent() {
-        let root = std::env::temp_dir().join(format!(
-            "protonctx_test_shadercache_absent_{}",
-            std::process::id()
-        ));
+        let root = crate::test_support::temp_dir("shadercache_absent");
         std::fs::create_dir_all(&root).unwrap();
 
         assert!(!delete_shader_cache(&root, 274190).unwrap());
@@ -198,10 +188,7 @@ mod tests {
         // single place that can reject a malformed location. Exercise it
         // directly: a leaf that is not under `steamapps/shadercache` must be
         // refused rather than deleted.
-        let root = std::env::temp_dir().join(format!(
-            "protonctx_test_shadercache_guard_{}",
-            std::process::id()
-        ));
+        let root = crate::test_support::temp_dir("shadercache_guard");
         // `<root>/274190` is missing the `steamapps/shadercache` parents.
         assert!(!is_shader_cache_dir(&root.join("274190"), 274190));
     }

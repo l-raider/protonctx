@@ -5,6 +5,7 @@ use std::path::Path;
 use steam_vdf_parser::parse_text;
 
 use super::SteamError;
+use super::paths;
 
 /// A single installed Steam app, as described by an `appmanifest` file.
 #[derive(Debug, Clone)]
@@ -15,11 +16,50 @@ pub struct InstalledApp {
     pub install_dir: Option<String>,
 }
 
+/// The fields both manifest readers need, from a single VDF parse.
+pub(super) struct AppStateFields {
+    pub app_id: Option<u32>,
+    pub name: String,
+    pub install_dir: Option<String>,
+}
+
+/// Read and VDF-parse one `appmanifest_*.acf`; `None` when unreadable/corrupt.
+pub(super) fn read_app_state(path: &Path) -> Option<AppStateFields> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let vdf = parse_text(&text).ok()?;
+    // The root key is "AppState"; its value is the object holding the app fields.
+    let app_state = vdf.as_obj()?;
+
+    Some(AppStateFields {
+        app_id: app_state
+            .get("appid")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse().ok()),
+        name: app_state
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        install_dir: app_state
+            .get("installdir")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    })
+}
+
+/// Whether `path`'s file name is an `appmanifest_*.acf` manifest.
+pub(super) fn is_appmanifest(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("appmanifest_") && n.ends_with(".acf"))
+}
+
 /// Read every `appmanifest_*.acf` in `<library>/steamapps/` and return the apps it
 /// describes. Missing or malformed manifests are skipped (an app list should be
 /// best-effort rather than fail wholesale).
 pub fn installed_apps(library: &Path) -> Result<Vec<InstalledApp>, SteamError> {
-    let steamapps = library.join("steamapps");
+    let steamapps = paths::steamapps_dir(library);
     if !steamapps.is_dir() {
         return Ok(Vec::new());
     }
@@ -28,13 +68,11 @@ pub fn installed_apps(library: &Path) -> Result<Vec<InstalledApp>, SteamError> {
     let entries = std::fs::read_dir(&steamapps)?;
     for entry in entries {
         let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !name.starts_with("appmanifest_") || !name.ends_with(".acf") {
+        let path = entry.path();
+        if !is_appmanifest(&path) {
             continue;
         }
 
-        let path = entry.path();
         if let Some(app) = parse_manifest(&path) {
             apps.push(app);
         }
@@ -46,32 +84,11 @@ pub fn installed_apps(library: &Path) -> Result<Vec<InstalledApp>, SteamError> {
 
 /// Parse a single `appmanifest_<id>.acf` file into an [`InstalledApp`].
 fn parse_manifest(path: &Path) -> Option<InstalledApp> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let vdf = parse_text(&text).ok()?;
-    // The root key is "AppState"; its value is the object holding the app fields.
-    let app_state = vdf.as_obj()?;
-
-    let app_id = app_state
-        .get("appid")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<u32>().ok())?;
-
-    let name = app_state
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let install_dir = app_state
-        .get("installdir")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string());
-
+    let state = read_app_state(path)?;
     Some(InstalledApp {
-        app_id,
-        name,
-        install_dir,
+        app_id: state.app_id?,
+        name: state.name,
+        install_dir: state.install_dir,
     })
 }
 
@@ -88,8 +105,7 @@ mod tests {
 	"installdir"		"Broforce"
 }"#;
 
-        let dir =
-            std::env::temp_dir().join(format!("protonctx_test_manifest_{}", std::process::id()));
+        let dir = crate::test_support::temp_dir("manifest");
         let steamapps = dir.join("steamapps");
         std::fs::create_dir_all(&steamapps).unwrap();
         std::fs::write(steamapps.join("appmanifest_274190.acf"), acf).unwrap();
@@ -105,10 +121,7 @@ mod tests {
 
     #[test]
     fn skips_non_manifest_files() {
-        let dir = std::env::temp_dir().join(format!(
-            "protonctx_test_manifest_skip_{}",
-            std::process::id()
-        ));
+        let dir = crate::test_support::temp_dir("manifest_skip");
         let steamapps = dir.join("steamapps");
         std::fs::create_dir_all(&steamapps).unwrap();
         std::fs::write(steamapps.join("libraryfolders.vdf"), "x").unwrap();

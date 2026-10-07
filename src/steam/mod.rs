@@ -12,7 +12,10 @@ pub mod compatdata;
 pub mod libraryfolders;
 pub mod locations;
 pub mod manifest;
+pub mod paths;
 pub mod shadercache;
+
+use std::collections::HashMap;
 
 use crate::models::Game;
 
@@ -68,9 +71,8 @@ fn is_compat_tool(install_dir: &std::path::Path) -> bool {
 /// The Steam root is returned *as* the library (not `<root>/steamapps`), because
 /// `installed_apps()` appends `steamapps` to each library entry.
 fn default_library_fallback(steam_root: &std::path::Path) -> Vec<std::path::PathBuf> {
-    if steam_root
-        .join("steamapps")
-        .join("libraryfolders.vdf")
+    if paths::steamapps_dir(steam_root)
+        .join(paths::LIBRARYFOLDERS_VDF)
         .is_file()
     {
         vec![steam_root.to_path_buf()]
@@ -119,7 +121,7 @@ pub fn discover_games() -> Result<Discovery, SteamError> {
             // Non-fatal: a corrupt config.vdf just means we can't show per-game
             // tool names, not that discovery itself failed.
             warnings.push(format!("Failed to parse config.vdf: {e}"));
-            std::collections::HashMap::new()
+            HashMap::new()
         }
     };
 
@@ -147,7 +149,7 @@ pub fn discover_games() -> Result<Discovery, SteamError> {
             let Some(install_dir) = app.install_dir else {
                 continue;
             };
-            let common = library.join("steamapps").join("common").join(&install_dir);
+            let common = paths::app_common_dir(library, &install_dir);
             if !common.is_dir() {
                 continue;
             }
@@ -212,8 +214,7 @@ mod tests {
 
     #[test]
     fn fallback_uses_steam_root_as_library() {
-        let root =
-            std::env::temp_dir().join(format!("protonctx_test_fallback_{}", std::process::id()));
+        let root = crate::test_support::temp_dir("fallback");
         std::fs::create_dir_all(root.join("steamapps")).unwrap();
         std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
 
@@ -225,10 +226,7 @@ mod tests {
 
     #[test]
     fn fallback_empty_when_no_steamapps_vdf() {
-        let root = std::env::temp_dir().join(format!(
-            "protonctx_test_fallback_empty_{}",
-            std::process::id()
-        ));
+        let root = crate::test_support::temp_dir("fallback_empty");
         std::fs::create_dir_all(&root).unwrap();
 
         assert!(default_library_fallback(&root).is_empty());
@@ -241,10 +239,7 @@ mod tests {
     // `<root>/steamapps/steamapps/...`.
     #[test]
     fn fallback_library_has_no_nested_steamapps() {
-        let root = std::env::temp_dir().join(format!(
-            "protonctx_test_fallback_nested_{}",
-            std::process::id()
-        ));
+        let root = crate::test_support::temp_dir("fallback_nested");
         std::fs::create_dir_all(root.join("steamapps")).unwrap();
         std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
 
