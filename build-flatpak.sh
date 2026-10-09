@@ -64,27 +64,18 @@ if ! flatpak remote-list --user | grep -q '^flathub'; then
         https://dl.flathub.org/repo/flathub.flatpakrepo
 fi
 
-# ── Ensure the KDE SDK is installed (declared in the manifest) ───────────────
-# The rust-stable branch is derived from the KDE SDK metadata below, so the SDK
-# must be present first. flatpak-builder would install it anyway via
-# --install-deps-from=flathub, but we need it here to resolve the branch.
-KDE_BRANCH=$(awk '/^runtime-version:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' "$MANIFEST")
-KDE_BRANCH="${KDE_BRANCH:-6.10}"
-KDE_SDK="org.kde.Sdk/x86_64/${KDE_BRANCH}"
-if ! flatpak list --runtime --columns=ref --all 2>/dev/null | grep -qF "$KDE_SDK"; then
-    echo "Installing ${KDE_SDK}..."
-    flatpak install --user -y flathub "$KDE_SDK"
+# ── Ensure the freedesktop SDK is installed (declared in the manifest) ───────
+# runtime-version is the freedesktop branch; the rust-stable extension uses the
+# same branch, so no cross-runtime metadata lookup is needed.
+FD_BRANCH=$(awk '/^runtime-version:/{gsub(/[^0-9.]/, "", $2); print $2; exit}' "$MANIFEST")
+FD_BRANCH="${FD_BRANCH:-26.08}"
+FD_SDK="org.freedesktop.Sdk/x86_64/${FD_BRANCH}"
+if ! flatpak list --runtime --columns=ref --all 2>/dev/null | grep -qF "$FD_SDK"; then
+    echo "Installing ${FD_SDK}..."
+    flatpak install --user -y flathub "$FD_SDK"
 fi
 
-# ── Ensure the rust-stable SDK extension is installed ────────────────────────
-# Look up the freedesktop branch from the KDE SDK metadata to find the matching
-# rust-stable branch. Guard the lookup so a missing/empty metadata can't abort
-# the script under `set -euo pipefail`; fall back to the default branch.
-FD_BRANCH=$(flatpak info --show-metadata "$KDE_SDK" 2>/dev/null \
-    | awk '/^\[Extension org\.freedesktop\.Platform\.GL\]/{f=1}
-           f && /^versions=/{split($0,a,"[=;]"); print a[2]; exit}' \
-    || true)
-FD_BRANCH="${FD_BRANCH:-25.08}"
+# ── Ensure the rust-stable SDK extension is installed (same branch) ──────────
 RUST_EXT="org.freedesktop.Sdk.Extension.rust-stable/x86_64/${FD_BRANCH}"
 if ! flatpak list --runtime --columns=ref --all 2>/dev/null | grep -qF "$RUST_EXT"; then
     echo "Installing ${RUST_EXT}..."

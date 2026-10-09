@@ -1,8 +1,8 @@
 app-id: io.github.l_raider.protonctx
 
-runtime: org.kde.Platform
-runtime-version: '6.11'
-sdk: org.kde.Sdk
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
 
