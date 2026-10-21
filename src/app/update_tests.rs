@@ -783,3 +783,9 @@ fn settings_persist_config_subprocess() {
         "config was not persisted: {text:?}"
     );
 }
+
+#[test]
+fn status_spinner_is_the_lucide_indicator() {
+    // The Lucide indicator is an SVG drawn by iced; it needs no rasterizer.
+    assert!(state().spinner.is_indicator());
+}

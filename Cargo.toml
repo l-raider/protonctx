@@ -29,7 +29,6 @@ native-theme-iced = { version = "0.6.1", default-features = false, features = [
     "widgets",
     "spinner",
     "lucide-icons",
-    "svg-rasterize",
     "system-fonts",
     "advanced-shaping",
     "iced_aw",
@@ -80,12 +79,12 @@ unwrap_used = "deny"
 
 # --- Debian packaging (cargo-deb) ---
 # The binary is listed explicitly to ensure it is packed regardless of
-# cargo-deb's auto-detection. Shared-library dependencies are pulled in
-# automatically via `depends = "$auto"` (requires dpkg-shlibdeps on the build
-# host — use a Debian/Ubuntu machine to get populated Depends).
+# cargo-deb's auto-detection. `$auto` (dpkg-shlibdeps, needs a Debian/Ubuntu
+# build host) only finds glibc: winit and softbuffer dlopen() the Wayland,
+# xkbcommon and X11 libraries at runtime, so those are listed explicitly.
 [package.metadata.deb]
 name = "protonctx"
-depends = "$auto"
+depends = "$auto, libwayland-client0, libwayland-cursor0, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxrandr2, libxi6"
 section = "utils"
 priority = "optional"
 maintainer = "protonctx maintainers"
@@ -105,6 +104,8 @@ assets = [
 ]
 
 # --- RPM packaging (cargo-generate-rpm) ---
+# Automatic requirements only see glibc; the dlopen()'d display libraries are
+# required explicitly (see the Debian note above).
 [package.metadata.generate-rpm]
 name = "protonctx"
 release = "1"
@@ -121,6 +122,18 @@ assets = [
     { source = "packaging/icons/hicolor/256x256/apps/protonctx.png", dest = "/usr/share/icons/hicolor/256x256/apps/protonctx.png", mode = "644" },
     { source = "packaging/icons/hicolor/scalable/apps/protonctx.svg", dest = "/usr/share/icons/hicolor/scalable/apps/protonctx.svg", mode = "644" },
 ]
+
+[package.metadata.generate-rpm.requires]
+libwayland-client = "*"
+libwayland-cursor = "*"
+libxkbcommon = "*"
+libxkbcommon-x11 = "*"
+libX11 = "*"
+libX11-xcb = "*"
+libxcb = "*"
+libXcursor = "*"
+libXrandr = "*"
+libXi = "*"
 
 # Dev builds keep protonctx itself at opt-level 0 for fast incremental
 # rebuilds, but optimize every dependency: at opt-level 0 the tiny-skia /

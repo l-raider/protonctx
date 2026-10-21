@@ -11,10 +11,9 @@ FROM debian:13
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates build-essential pkg-config cmake \
+    curl ca-certificates build-essential pkg-config \
     file git \
-    libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev \
-    libfontconfig1-dev libssl-dev \
+    libwayland-dev libxkbcommon-dev libx11-dev \
     librsvg2-bin \
   && rm -rf /var/lib/apt/lists/*
 

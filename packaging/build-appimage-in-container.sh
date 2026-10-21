@@ -13,6 +13,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # 1. Build the distribution binary.
+# The repo's .cargo/config.toml links with mold for fast dev builds; the
+# container has no mold, and distribution builds use the system linker. An
+# empty RUSTFLAGS overrides the config's target rustflags.
+export RUSTFLAGS=""
 cargo build --profile publicrelease
 
 # 2. Assemble the AppDir.

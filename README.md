@@ -5,8 +5,9 @@ Helper GUI tool to launch executables inside a Steam game's Proton context.
 
 A single-window Linux (mainly KDE Plasma) utility that lists installed Steam games and lets
 you run an arbitrary `.exe` (or a built-in Wine tool such as `winecfg`/`taskmgr`) inside a
-selected game's Proton prefix. The UI is built with [GPUI](https://gpui.rs/) — no Qt or
-C++ toolchain is required to build it.
+selected game's Proton prefix. The UI is built with [iced](https://iced.rs/) using its
+CPU renderer (tiny-skia) and follows the KDE colour scheme and fonts — no Qt or C++
+toolchain is required to build it.
 
 ## Features
 
@@ -24,12 +25,16 @@ C++ toolchain is required to build it.
 
 Requirements:
 
-- Rust 2024 edition toolchain (1.95+).
-- System libraries used by GPUI (X11/Wayland, xkbcommon, fontconfig, OpenSSL). On
-  Debian/Ubuntu: `libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libx11-dev
-  libfontconfig1-dev libssl-dev`. On Fedora: `libxkbcommon-devel
-  libxkbcommon-x11-devel wayland-devel libX11-devel fontconfig-devel openssl-devel`.
-- A C toolchain and `pkg-config` for the native `-sys` crates in the dependency tree.
+- Rust 2024 edition toolchain (1.98+).
+- [mold](https://github.com/rui314/mold): `.cargo/config.toml` links with it for fast
+  builds (`dnf install mold` / `apt install mold`; or override with `RUSTFLAGS=""`).
+- A C toolchain and `pkg-config` (a few build scripts in the dependency tree), plus the
+  Wayland, xkbcommon and Xlib development files they probe. On Debian/Ubuntu:
+  `build-essential pkg-config libwayland-dev libxkbcommon-dev libx11-dev`. On Fedora:
+  `gcc pkgconf-pkg-config wayland-devel libxkbcommon-devel libX11-devel`.
+- At runtime the Wayland client/cursor, xkbcommon and X11 (Xlib, Xcursor, Xrandr, Xi)
+  libraries are loaded dynamically; every desktop install already has them. No OpenSSL
+  and no GPU driver are needed.
 
 ```sh
 cargo build --release
@@ -53,6 +58,15 @@ also required.
 ```sh
 cargo run
 ```
+
+Dev builds keep protonctx itself unoptimised for fast rebuilds but optimise all
+dependencies (the software renderer is unusably slow otherwise), so the first build
+takes a few minutes. `cargo run -- --preset light` (or `dark`) forces the bundled
+Breeze colours instead of the live KDE scheme.
+
+The About, Settings and confirmation dialogs are real windows with server-side
+decorations. iced 0.14 cannot mark a window as a child of another, so KDE shows each
+open dialog in the taskbar, and on Wayland KWin chooses where it opens.
 
 ### Keyboard shortcuts
 

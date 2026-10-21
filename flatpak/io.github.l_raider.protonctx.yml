@@ -12,7 +12,8 @@ finish-args:
   - --share=ipc
   - --socket=fallback-x11
   - --socket=wayland
-  - --device=dri
+  # No --device=dri: the iced tiny-skia renderer draws on the CPU and
+  # presents through shared memory.
   # Read-only access to $HOME so protonctx can read the Steam vdf files
   # (libraryfolders.vdf, config.vdf, appmanifest_*.acf) that live under
   # ~/.local/share/Steam and ~/.steam/.
