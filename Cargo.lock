@@ -3258,6 +3258,7 @@ version = "1.3.5"
 dependencies = [
  "ashpd",
  "async-channel",
+ "async-io",
  "chrono",
  "iced",
  "iced_aw",

@@ -37,6 +37,8 @@ pub const HEADER_WEIGHT: Weight = Weight::Medium;
 #[derive(Clone, Debug)]
 pub struct AppTokens {
     pub is_dark: bool,
+    /// The resolved theme itself, for `native-theme-iced` style functions.
+    pub resolved: ResolvedTheme,
 
     // ---- Surfaces ----
     /// Window background (`QPalette::Window`).
@@ -113,6 +115,20 @@ pub struct AppTokens {
     pub semibold_font: Font,
     pub mono_font: Font,
     pub mono_size: f32,
+}
+
+impl AppTokens {
+    /// `units` Tailwind steps (a quarter rem each) in whole pixels. gpui-kit
+    /// sized its spacing in rem, and its rem is the theme font size, so
+    /// `px_1` there is 3.33 px at KDE's 10 pt; rounding keeps edges crisp.
+    pub fn rem(&self, units: f32) -> f32 {
+        (units * self.font_size / 4.0).round()
+    }
+
+    /// gpui-kit's `text_sm`: 0.875 rem.
+    pub fn small_font_size(&self) -> f32 {
+        self.font_size * 0.875
+    }
 }
 
 static TOKENS: OnceLock<AppTokens> = OnceLock::new();
@@ -237,6 +253,7 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
 
     AppTokens {
         is_dark: loaded.is_dark,
+        resolved: r.clone(),
 
         background,
         foreground,

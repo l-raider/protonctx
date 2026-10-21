@@ -38,6 +38,10 @@ iced_aw = { version = "0.14.1", default-features = false, features = ["menu", "c
 iced_table2 = "0.14.2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-channel = "2"
+# Timers for the launch-output batch window and the spinner tick: the
+# thread-pool executor has no `iced::time`; async-io is already in the tree
+# through ashpd.
+async-io = "2"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser"] }
 url = "2"
 steam-vdf-parser = "0.1"
