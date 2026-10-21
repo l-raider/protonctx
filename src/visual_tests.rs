@@ -82,3 +82,41 @@ fn visual_states() {
     move_to(&mut sim, Point::new(row.x + 30.0, row.y + 70.0));
     save(&mut sim, &theme, "main-context-menu");
 }
+
+#[test]
+#[ignore]
+fn visual_dialogs() {
+    use crate::views::dialog_ui::{self, DialogKind};
+
+    let state = state();
+    let theme = state.theme.clone();
+    let id = iced::window::Id::unique();
+    let game = state.rows[2].clone();
+    let kinds = [
+        ("dialog-about", DialogKind::About),
+        ("dialog-settings", DialogKind::Settings),
+        (
+            "dialog-launch-error",
+            DialogKind::LaunchError(
+                "Failed to launch winecfg: no Proton directory found for this game (has it been run yet?)"
+                    .to_string(),
+            ),
+        ),
+        (
+            "dialog-delete-cache",
+            DialogKind::DeleteShaderCache {
+                game,
+                path: "/home/lraider/.local/share/Steam/steamapps/shadercache/311690".into(),
+                deleting: false,
+            },
+        ),
+    ];
+    for (name, kind) in kinds {
+        let mut sim = Simulator::with_size(
+            Default::default(),
+            kind.size(),
+            dialog_ui::view(id, &kind, &state),
+        );
+        save(&mut sim, &theme, name);
+    }
+}

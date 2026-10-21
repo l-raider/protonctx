@@ -9,14 +9,16 @@
 //! while `loading` is set, so two scans can never overlap and a completion
 //! never needs a stale-generation check.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use iced::widget::{Id, operation, pane_grid, scrollable, text_editor};
-use iced::{Size, Subscription, Task, clipboard, event, keyboard, mouse, window};
+use iced::{Point, Size, Subscription, Task, clipboard, event, keyboard, mouse, window};
 
 use crate::background::{self, BrowseOutcome, LaunchEvent, LaunchFeed};
 use crate::games::{self, ColumnSort, GameRow};
+use crate::views::dialog_ui::{self, DialogButton, DialogKind};
 use crate::views::logs_ui::LogState;
 use crate::views::table::{self, GameColumn, TableView};
 use crate::views::{main_ui, widgets};
@@ -90,6 +92,9 @@ pub fn discovery_outcome(
 /// A runtime event the app listens to, tagged with its window.
 #[derive(Clone, Debug)]
 pub enum WindowInput {
+    Opened { position: Option<Point>, size: Size },
+    Moved(Point),
+    Resized(Size),
     Focused,
     Unfocused,
     RightPressed,
@@ -142,6 +147,12 @@ pub enum Message {
     CopyCompatDataPath,
     CopyToolPath,
     ConfirmDeleteShaderCache,
+    ShaderCacheDeleted(Result<bool, String>),
+
+    // ---- Dialogs ----
+    DialogButton(window::Id, DialogButton),
+    RememberLastDir(bool),
+
     /// A batch of launch output and exits from the reader/watcher threads.
     LaunchEvents(Vec<LaunchEvent>),
     SpinnerTick(Instant),
@@ -202,6 +213,16 @@ pub struct State {
     pub reduce_motion: bool,
     /// Single-flight flag for the portal file chooser.
     pub browsing: bool,
+    /// Single-flight flag for the shader-cache deletion.
+    pub deleting_shader_cache: bool,
+
+    // ---- Dialogs ----
+    /// Open dialog windows, one per kind.
+    pub dialogs: BTreeMap<window::Id, DialogKind>,
+    /// The main window's position (where the platform reports it; never on
+    /// Wayland) and size, for centring dialogs over it.
+    main_position: Option<Point>,
+    main_size: Size,
 
     pub theme: iced::Theme,
 }
@@ -266,6 +287,10 @@ impl State {
             spinner_elapsed: Duration::ZERO,
             reduce_motion: t.reduce_motion,
             browsing: false,
+            deleting_shader_cache: false,
+            dialogs: BTreeMap::new(),
+            main_position: None,
+            main_size: MAIN_SIZE,
             theme: iced::Theme::Dark,
         };
         state.sync_table();
@@ -276,7 +301,10 @@ impl State {
         if window == self.main_window {
             format!("protonctx v{}", env!("CARGO_PKG_VERSION"))
         } else {
-            String::new()
+            self.dialogs
+                .get(&window)
+                .map(|kind| kind.title().to_string())
+                .unwrap_or_default()
         }
     }
 
@@ -287,6 +315,8 @@ impl State {
     pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {
         if window == self.main_window {
             main_ui::view(self)
+        } else if let Some(kind) = self.dialogs.get(&window) {
+            dialog_ui::view(window, kind, self)
         } else {
             iced::widget::space().into()
         }
@@ -321,7 +351,8 @@ impl State {
                 self.log.clear();
                 Task::none()
             }
-            Message::OpenSettings | Message::OpenAbout => Task::none(),
+            Message::OpenSettings => self.open_dialog(DialogKind::Settings),
+            Message::OpenAbout => self.open_dialog(DialogKind::About),
             Message::Exit => window::close(self.main_window),
 
             Message::HeaderPressed(column) => {
@@ -411,7 +442,10 @@ impl State {
                 Some(row) => copy_to_clipboard(row.proton_dir.clone()),
                 None => Task::none(),
             },
-            Message::ConfirmDeleteShaderCache => Task::none(),
+            Message::ConfirmDeleteShaderCache => self.confirm_delete_shader_cache(),
+            Message::ShaderCacheDeleted(result) => self.shader_cache_deleted(result),
+            Message::DialogButton(window, button) => self.dialog_button(window, button),
+            Message::RememberLastDir(value) => self.apply_remember_last_dir(value),
             Message::LaunchEvents(events) => {
                 let tasks: Vec<_> = events
                     .into_iter()
@@ -428,10 +462,19 @@ impl State {
 
     fn on_window_input(&mut self, window: window::Id, input: WindowInput) -> Task<Message> {
         let is_main = window == self.main_window;
+        if !is_main {
+            return self.on_dialog_input(window, input);
+        }
         match input {
+            WindowInput::Opened { position, size } => {
+                self.main_position = position;
+                self.main_size = size;
+            }
+            WindowInput::Moved(position) => self.main_position = Some(position),
+            WindowInput::Resized(size) => self.main_size = size,
             WindowInput::Focused if is_main => self.main_focused = true,
             WindowInput::Unfocused if is_main => self.main_focused = false,
-            WindowInput::RightPressed if is_main => {
+            WindowInput::RightPressed if is_main && self.dialogs.is_empty() => {
                 // Right-clicking selects the row so the context menu acts on
                 // it (Qt `setCurrentIndex`). The context menu itself opens
                 // from the cell under the pointer.
@@ -440,10 +483,181 @@ impl State {
                 }
             }
             WindowInput::Closed if is_main => return iced::exit(),
-            WindowInput::Key { key, modifiers } if is_main => return self.shortcut(&key, modifiers),
+            // The main window ignores input while a dialog is open.
+            WindowInput::Key { key, modifiers } if is_main && self.dialogs.is_empty() => {
+                return self.shortcut(&key, modifiers);
+            }
             _ => {}
         }
         Task::none()
+    }
+
+    /// Esc and the WM close button dismiss a dialog unless it is locked;
+    /// Enter and Space activate its default button.
+    fn on_dialog_input(&mut self, window: window::Id, input: WindowInput) -> Task<Message> {
+        use keyboard::key::Named;
+        let Some(kind) = self.dialogs.get(&window) else {
+            return Task::none();
+        };
+        match input {
+            WindowInput::Closed => {
+                self.dialogs.remove(&window);
+                Task::none()
+            }
+            WindowInput::CloseRequested => self.dismiss_dialog(window),
+            WindowInput::Key { key, .. } => match key.as_ref() {
+                keyboard::Key::Named(Named::Escape) => self.dismiss_dialog(window),
+                keyboard::Key::Named(Named::Enter | Named::Space) => {
+                    let button = kind.default_button();
+                    self.dialog_button(window, button)
+                }
+                _ => Task::none(),
+            },
+            _ => Task::none(),
+        }
+    }
+
+    /// Close `window` if its dialog may be dismissed now.
+    fn dismiss_dialog(&mut self, window: window::Id) -> Task<Message> {
+        match self.dialogs.get(&window) {
+            Some(kind) if kind.dismissible() => self.close_dialog(window),
+            _ => Task::none(),
+        }
+    }
+
+    fn close_dialog(&mut self, window: window::Id) -> Task<Message> {
+        if self.dialogs.remove(&window).is_some() {
+            window::close(window)
+        } else {
+            Task::none()
+        }
+    }
+
+    /// The open window showing a dialog of `kind`'s kind.
+    pub fn dialog_window(&self, kind: &DialogKind) -> Option<window::Id> {
+        self.dialogs
+            .iter()
+            .find(|(_, open)| open.same_window(kind))
+            .map(|(id, _)| *id)
+    }
+
+    /// Open a dialog, or focus the open one of the same kind and replace its
+    /// content.
+    pub fn open_dialog(&mut self, kind: DialogKind) -> Task<Message> {
+        if let Some(window) = self.dialog_window(&kind) {
+            self.dialogs.insert(window, kind);
+            return window::gain_focus(window);
+        }
+        let parent = self.main_position.map(|position| (position, self.main_size));
+        let (window, open) = window::open(dialog_ui::window_settings(&kind, parent));
+        self.dialogs.insert(window, kind);
+        // The window's own settings do the rest; nothing to do once open.
+        open.discard()
+    }
+
+    fn dialog_button(&mut self, window: window::Id, button: DialogButton) -> Task<Message> {
+        let Some(kind) = self.dialogs.get(&window) else {
+            return Task::none();
+        };
+        if !kind.dismissible() {
+            // Locked while working: every button is disabled.
+            return Task::none();
+        }
+        match (kind, button) {
+            (DialogKind::DeleteShaderCache { .. }, DialogButton::Yes) => {
+                self.commit_delete_shader_cache(window)
+            }
+            _ => self.close_dialog(window),
+        }
+    }
+
+    /// Persist the settings checkbox immediately (the legacy dialog did) and
+    /// log the change. Write failures are diagnostics only, as in Qt.
+    fn apply_remember_last_dir(&mut self, value: bool) -> Task<Message> {
+        self.remember_last_dir = value;
+        let config = crate::config::AppConfig {
+            remember_last_dir: value,
+        };
+        if let Err(error) = crate::config::save_config(&config) {
+            eprintln!("protonctx: failed to save config: {error}");
+        }
+        self.append_log(format!("Settings: remember last directory = {value}"))
+    }
+
+    /// Ask before deleting the selected game's shader cache.
+    fn confirm_delete_shader_cache(&mut self) -> Task<Message> {
+        let Some(row) = self.selected_row().cloned() else {
+            return Task::none();
+        };
+        let path = crate::steam::shadercache::shader_cache_dir_for(
+            Path::new(&row.library_path),
+            row.app_id,
+        );
+        self.open_dialog(DialogKind::DeleteShaderCache {
+            game: row,
+            path,
+            deleting: false,
+        })
+    }
+
+    /// Delete the confirmed game's shader cache on the thread pool. The
+    /// confirmation stays open, locked, until the outcome is known.
+    fn commit_delete_shader_cache(&mut self, window: window::Id) -> Task<Message> {
+        // Single-flight: a queued second click while one runs is a no-op.
+        if self.deleting_shader_cache {
+            return Task::none();
+        }
+        let Some(DialogKind::DeleteShaderCache { game, deleting, .. }) =
+            self.dialogs.get_mut(&window)
+        else {
+            return Task::none();
+        };
+        *deleting = true;
+        self.deleting_shader_cache = true;
+        let library = PathBuf::from(&game.library_path);
+        let app_id = game.app_id;
+        Task::perform(
+            async move {
+                crate::steam::shadercache::delete_shader_cache(&library, app_id)
+                    .map_err(|error| error.to_string())
+            },
+            Message::ShaderCacheDeleted,
+        )
+    }
+
+    /// Report the deletion exactly as the legacy model did. The confirmation
+    /// closes on every outcome; an error then opens Launch Error.
+    fn shader_cache_deleted(&mut self, result: Result<bool, String>) -> Task<Message> {
+        self.deleting_shader_cache = false;
+        let window = self
+            .dialogs
+            .iter()
+            .find(|(_, kind)| matches!(kind, DialogKind::DeleteShaderCache { .. }))
+            .map(|(id, kind)| (*id, kind.clone()));
+        let Some((window, DialogKind::DeleteShaderCache { game, .. })) = window else {
+            return Task::none();
+        };
+        let closed = self.close_dialog(window);
+        // The cache may be gone now, which disables the context-menu item.
+        self.select_row(self.selected);
+        let reported = match result {
+            Ok(true) => {
+                self.status_text = "Shader cache deleted".to_string();
+                self.append_log(format!(
+                    "Deleted shader cache for {} (app id {})",
+                    game.name, game.app_id
+                ))
+            }
+            Ok(false) => {
+                self.status_text = "No shader cache to delete".to_string();
+                self.append_log(format!(
+                    "No shader cache found for {} (app id {})",
+                    game.name, game.app_id
+                ))
+            }
+            Err(error) => self.show_error(format!("Failed to delete shader cache: {error}")),
+        };
+        Task::batch([closed, reported])
     }
 
     /// The global shortcuts: F5 refreshes, Ctrl+C copies the log selection,
@@ -613,7 +827,9 @@ impl State {
     /// transient, so the log keeps the history.
     pub fn show_error(&mut self, message: impl Into<String>) -> Task<Message> {
         let message = message.into();
-        self.append_log(format!("Launch error: {message}"))
+        let logged = self.append_log(format!("Launch error: {message}"));
+        let opened = self.open_dialog(DialogKind::LaunchError(message));
+        Task::batch([logged, opened])
     }
 
     /// Re-run Steam discovery, preserving the table's current sort order.
@@ -802,6 +1018,11 @@ fn window_input(
     window: window::Id,
 ) -> Option<(window::Id, WindowInput)> {
     let input = match event {
+        iced::Event::Window(window::Event::Opened { position, size }) => {
+            WindowInput::Opened { position, size }
+        }
+        iced::Event::Window(window::Event::Moved(position)) => WindowInput::Moved(position),
+        iced::Event::Window(window::Event::Resized(size)) => WindowInput::Resized(size),
         iced::Event::Window(window::Event::Focused) => WindowInput::Focused,
         iced::Event::Window(window::Event::Unfocused) => WindowInput::Unfocused,
         iced::Event::Window(window::Event::CloseRequested) => WindowInput::CloseRequested,

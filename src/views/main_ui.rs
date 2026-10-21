@@ -1,7 +1,7 @@
 //! The main window: toolbar, games table, action row, log pane, and status
 //! bar.
 
-use iced::widget::{Space, column, container, pane_grid, row, sensor};
+use iced::widget::{Space, column, container, opaque, pane_grid, row, sensor, stack};
 use iced::{Alignment, Background, Element, Length, Theme};
 
 use crate::app::{Message, PaneKind, State};
@@ -30,15 +30,24 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill);
 
-    container(column![toolbar(state), content, status_bar(state)])
+    let window = container(column![toolbar(state), content, status_bar(state)])
         .width(Length::Fill)
         .height(Length::Fill)
         .style(move |_theme: &Theme| container::Style {
             background: Some(Background::Color(t.background)),
             text_color: Some(t.foreground),
             ..container::Style::default()
-        })
-        .into()
+        });
+
+    // While any dialog is open the main window ignores input: an opaque
+    // layer covers it. The window content stays the first stack child either
+    // way, so its widget state survives a dialog opening.
+    let blocker: Element<'_, Message> = if state.dialogs.is_empty() {
+        Space::new().width(Length::Fill).height(Length::Fill).into()
+    } else {
+        opaque(Space::new().width(Length::Fill).height(Length::Fill))
+    };
+    stack![window, blocker].into()
 }
 
 /// The toolbar on the KDE Header colour: the hamburger menu and Refresh.
