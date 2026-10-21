@@ -1,6 +1,12 @@
 {
   "version": 1,
   "skills": {
+    "iced-rs": {
+      "source": "vanillagreencom/kendex",
+      "sourceType": "github",
+      "skillPath": "skills/iced-rs/SKILL.md",
+      "computedHash": "9db4edabe04d5e57235b64bd9bf5aa3e5e0aae25a160423d5af2e29aa066110f"
+    },
     "qt-cpp-docs": {
       "source": "TheQtCompanyRnD/agent-skills",
       "sourceType": "github",
