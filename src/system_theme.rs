@@ -1,42 +1,63 @@
 //! Static desktop theming at startup.
 //!
-//! KDE is the supported desktop: `native-theme-gpui` reads the live
-//! `kdeglobals` scheme (colors, typography, DPI, accessibility) and installs
-//! both the light and dark variants, so gpui-component's `Theme::change`
-//! switches between native palettes with no custom detection. The theme is
-//! read once at startup; live scheme changes are out of scope. Off KDE, and
-//! under GPUI's test scheduler, this is a no-op. Before install, the resolved
-//! variants also have their scrollbar model re-derived from the palette, so
-//! gpui-base paints the Qt/Breeze track and handle in every state.
+//! KDE is the supported desktop: `native-theme` reads the live `kdeglobals`
+//! scheme (colors, typography, DPI, accessibility) once at startup and the
+//! active variant is handed to [`crate::theme`], which builds the iced
+//! palette and the app's token sidecar from it. Live scheme changes are out of
+//! scope. Off KDE (and in tests, which must stay deterministic) the bundled
+//! Breeze preset is used instead. Before use, the resolved variant also has
+//! its fonts re-derived at the base logical DPI and its scrollbar model
+//! re-derived from the palette, so every scrollbar paints the Qt/Breeze
+//! track and handle.
 
 use std::sync::mpsc;
 use std::time::Duration;
 
-use gpui_kit::component::{Theme, scroll::ScrollbarMode};
-use gpui_kit::*;
-use native_theme::theme::{FontSize, ResolvedFontSpec, ResolvedTheme};
-use native_theme_gpui::{
-    AccessibilityPreferences, NativeTheme, Rgba, SystemTheme, apply_system_theme, base_layer,
-    from_preset,
-};
+use native_theme::theme::{ColorMode, FontSize, ResolvedFontSpec, ResolvedTheme};
+use native_theme::{AccessibilityPreferences, SystemTheme};
+use native_theme_iced::Rgba;
 
-/// Breeze preset installed when the platform reader fails.
-const FALLBACK_PRESET: &str = "kde-breeze";
+/// Breeze preset used when the platform reader fails or the desktop is not
+/// KDE.
+pub(crate) const FALLBACK_PRESET: &str = "kde-breeze";
 
-/// Alpha of the KDE selection color used for hover accents.
-const ACCENT_ALPHA: f32 = 0.3;
-
-/// Base logical DPI for point-stated desktop font sizes. GPUI already applies
+/// Base logical DPI for point-stated desktop font sizes. iced already applies
 /// the display scale factor (the Wayland compositor scale; `Xft.dpi / 96` on
-/// X11) to every logical pixel, so resolving points at the display DPI bakes
-/// that same signal into `Theme.font_size` and scales the rem axis twice.
-/// Desktop point sizes therefore resolve at the base logical DPI, as Qt does.
+/// X11) to every logical pixel, so resolving points at the display DPI would
+/// apply that same signal twice. Desktop point sizes therefore resolve at the
+/// base logical DPI, as Qt does.
 const BASE_DPI: f32 = 96.0;
 
 /// Upper bound on the startup theme read. On KDE the reader makes a portal
 /// D-Bus call that has no timeout of its own; a stalled portal must not block
-/// the UI thread before the first window opens.
+/// startup before the first window opens.
 const THEME_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Breeze scrollbar metrics (`kstyle/breezemetrics.h`): the groove is
+/// `ScrollBar_Extend`, the handle `ScrollBar_SliderWidth` with
+/// `ScrollBar_MinSliderHeight` as the minimum length.
+///
+/// The groove is pinned to the 16 px rail the gpui build used instead of
+/// Breeze's 21 px, so the table and log keep the same content width; the
+/// Breeze handle width is kept and centred with 4 px on both sides.
+pub(crate) const SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
+pub(crate) const SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
+pub(crate) const SCROLLBAR_MIN_THUMB_LENGTH: f32 = 20.0;
+
+/// Breeze paints the resting handle as `QPalette::WindowText` at 50 % over
+/// the window fill (`scrollBarHandleColor` / `renderScrollBarHandle`); the
+/// alpha is kept so it composites over the groove as Qt does.
+const SCROLLBAR_THUMB_ALPHA: f32 = 0.5;
+
+/// The theme the application runs with: the resolved variant, its display
+/// name, and the accessibility preferences that scale its text.
+#[derive(Clone, Debug)]
+pub struct LoadedTheme {
+    pub resolved: ResolvedTheme,
+    pub name: String,
+    pub is_dark: bool,
+    pub prefs: AccessibilityPreferences,
+}
 
 /// Result of the worker-thread theme read; the error is stringified so it can
 /// cross the thread boundary.
@@ -56,32 +77,10 @@ fn font_size_at_base_dpi(font: &ResolvedFontSpec) -> f32 {
 }
 
 /// Re-derives the base UI and mono fonts of `resolved` at [`BASE_DPI`].
-///
-/// Both variants must be normalized before `apply_system_theme` / `to_theme`:
-/// the flat `Theme.font_size`, the stored variant, and both `ThemeConfig`s
-/// would otherwise disagree with each other and with the intended scale.
 fn normalize_resolved_fonts(resolved: &mut ResolvedTheme) {
     resolved.defaults.font.size = font_size_at_base_dpi(&resolved.defaults.font);
     resolved.defaults.mono_font.size = font_size_at_base_dpi(&resolved.defaults.mono_font);
 }
-
-/// Breeze scrollbar metrics (`kstyle/breezemetrics.h`): the groove is
-/// `ScrollBar_Extend`, the handle `ScrollBar_SliderWidth` with
-/// `ScrollBar_MinSliderHeight` as the minimum length.
-///
-/// gpui-base gives every scrollbar a fixed 16 px overlay rail
-/// (`Scrollbar::width()`), so the groove is pinned to that rail instead of
-/// Breeze's 21 px: a wider groove is clipped and its hitbox swallows content
-/// clicks. The Breeze handle width is kept and the connector's centring
-/// derivation gives it 4 px on both sides.
-const SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
-const SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
-const SCROLLBAR_MIN_THUMB_LENGTH: f32 = 20.0;
-
-/// Breeze paints the resting handle as `QPalette::WindowText` at 50 % over
-/// the window fill (`scrollBarHandleColor` / `renderScrollBarHandle`); the
-/// alpha is kept so gpui-base composites it over the groove as Qt does.
-const SCROLLBAR_THUMB_ALPHA: f32 = 0.5;
 
 /// `color` with its alpha scaled by `factor`, RGB untouched.
 fn scale_alpha(color: Rgba, factor: f32) -> Rgba {
@@ -94,8 +93,8 @@ fn scale_alpha(color: Rgba, factor: f32) -> Rgba {
 }
 
 /// Re-derives the scrollbar model from the resolved KDE palette so every
-/// gpui-base scrollbar — games table, log pane, dialogs, lists, menus —
-/// paints the Qt/Breeze track and handle in all states:
+/// scrollbar — games table, log pane, dialogs — paints the Qt/Breeze track
+/// and handle in all states:
 ///
 /// - track: the window fill, Breeze's groove colour;
 /// - thumb: the window text at [`SCROLLBAR_THUMB_ALPHA`] over the groove,
@@ -115,20 +114,41 @@ fn normalize_resolved_scrollbar(resolved: &mut ResolvedTheme) {
     resolved.scrollbar.thumb_active_color = Some(resolved.defaults.selection_background);
 }
 
-/// Applies the desktop theme once at startup. No-op off KDE and under GPUI's
-/// test scheduler, which must stay deterministic.
-pub(crate) fn init(cx: &mut App) {
-    if !is_kde(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()) || is_test_scheduler(cx) {
-        return;
+/// Applies both normalizations; every theme the app uses goes through this.
+fn normalize(resolved: &mut ResolvedTheme) {
+    normalize_resolved_fonts(resolved);
+    normalize_resolved_scrollbar(resolved);
+}
+
+/// Reads the desktop theme once at startup.
+///
+/// `preset_mode` forces the bundled Breeze preset in that mode (the
+/// `--preset light|dark` development switch). Otherwise the live KDE scheme
+/// is read on KDE, and the Breeze preset in the system's mode is used off KDE
+/// or when the reader fails.
+pub fn load(preset_mode: Option<bool>) -> LoadedTheme {
+    if let Some(is_dark) = preset_mode {
+        return preset(&AccessibilityPreferences::default(), is_dark);
+    }
+
+    if !is_kde(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()) {
+        return preset(
+            &AccessibilityPreferences::default(),
+            native_theme::detect::system_is_dark(),
+        );
     }
 
     match read_system_theme() {
-        Ok(mut system) => {
-            normalize_resolved_fonts(&mut system.light);
-            normalize_resolved_fonts(&mut system.dark);
-            normalize_resolved_scrollbar(&mut system.light);
-            normalize_resolved_scrollbar(&mut system.dark);
-            apply_system_theme(&system, cx);
+        Ok(system) => {
+            let is_dark = system.mode == ColorMode::Dark;
+            let mut resolved = system.pick(system.mode).clone();
+            normalize(&mut resolved);
+            LoadedTheme {
+                resolved,
+                name: system.name.to_string(),
+                is_dark,
+                prefs: system.accessibility,
+            }
         }
         Err(error) => {
             eprintln!(
@@ -136,25 +156,13 @@ pub(crate) fn init(cx: &mut App) {
             );
             // Defaults, not `from_system()`: the reader already failed or
             // timed out, so a second platform read would add another stall.
-            // The mode comes from the crate's own file-based detection, not
-            // from `cx.window_appearance()`: on Linux the platform appearance
-            // starts as Light and is only corrected once the portal answers
-            // (which also happens after the first frame), so reading it here
-            // would flash the wrong variant. `system_is_dark` reads
-            // `kdeglobals` directly on KDE.
-            install_preset(
+            // `system_is_dark` reads `kdeglobals` directly on KDE.
+            preset(
                 &AccessibilityPreferences::default(),
                 native_theme::detect::system_is_dark(),
-                cx,
-            );
+            )
         }
     }
-
-    // Breeze keeps scrollbars visible; the connector derives its mode from the
-    // scheme and would hide them in overlay mode.
-    Theme::set_scrollbar_mode(ScrollbarMode::Always, cx);
-    restore_breeze_traits(cx);
-    install_scrollbar_styles(cx);
 }
 
 /// Reads the system theme on a worker thread and waits at most
@@ -187,134 +195,57 @@ fn read_system_theme() -> Result<SystemTheme, String> {
     }
 }
 
-/// Installs the Breeze preset for `is_dark`; used when the platform reader
-/// fails. The mode is chosen by the caller so this stays deterministic and
-/// never consults the platform appearance, which is stale before the portal
-/// answers. The preferences are a parameter so tests can pass a deterministic
-/// [`AccessibilityPreferences::default`] and stay I/O-free.
-pub(crate) fn install_preset(prefs: &AccessibilityPreferences, is_dark: bool, cx: &mut App) {
-    match from_preset(FALLBACK_PRESET, is_dark, prefs) {
-        Ok((theme, mut resolved)) => {
-            // `from_preset` already built the theme from the display-DPI
-            // resolution; rebuild it from the normalized variant so the flat
-            // theme, its `ThemeConfig`, and the stored variant agree.
-            normalize_resolved_fonts(&mut resolved);
-            normalize_resolved_scrollbar(&mut resolved);
-            let name = theme.theme_name().clone();
-            let theme = native_theme_gpui::to_theme(&resolved, &name, is_dark, prefs);
-            native_theme_gpui::apply(theme, &resolved, prefs, cx);
-        }
+/// The normalized Breeze preset for `is_dark`. The mode is chosen by the
+/// caller so this stays deterministic; the preferences are a parameter so
+/// tests can pass [`AccessibilityPreferences::default`] and stay I/O-free.
+///
+/// The bundled preset always resolves; should it ever fail, the failure is
+/// reported and iced's built-in palette colours are used by the caller via
+/// the same preset in the other mode.
+pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
+    let resolve = |is_dark: bool| -> native_theme::Result<(String, ResolvedTheme)> {
+        let spec = native_theme::theme::Theme::preset(FALLBACK_PRESET)?;
+        let name = spec.name.to_string();
+        let variant = spec.into_variant(if is_dark {
+            ColorMode::Dark
+        } else {
+            ColorMode::Light
+        })?;
+        Ok((name, variant.resolve_system()?))
+    };
+
+    let (name, mut resolved, is_dark) = match resolve(is_dark) {
+        Ok((name, resolved)) => (name, resolved, is_dark),
         Err(error) => {
-            eprintln!("protonctx: the {FALLBACK_PRESET} preset failed to resolve ({error})")
+            eprintln!("protonctx: the {FALLBACK_PRESET} preset failed to resolve ({error})");
+            match resolve(!is_dark) {
+                Ok((name, resolved)) => (name, resolved, !is_dark),
+                // Both bundled variants failing means the binary itself is
+                // broken; there is no theme data left to fall back to.
+                Err(error) => panic!("the bundled {FALLBACK_PRESET} preset is unusable: {error}"),
+            }
         }
+    };
+    normalize(&mut resolved);
+    LoadedTheme {
+        resolved,
+        name,
+        is_dark,
+        prefs: prefs.clone(),
     }
 }
 
-/// Pins the scrollbar styles on gpui-base after the styled theme is
-/// installed.
-///
-/// The connector already projects these values, but a gpui-component rebuild
-/// can land after that projection, so the first frame is written here from
-/// the same normalised variant the connector stores. Both writers therefore
-/// agree; no extra observer (and no observer ping-pong) is needed because the
-/// application never rebuilds the theme at runtime.
-pub(crate) fn install_scrollbar_styles(cx: &mut App) {
-    let Some((geometry, resizable)) = cx
-        .try_global::<NativeTheme>()
-        .and_then(|native| native.resolved(cx))
-        .map(|resolved| {
-            (
-                base_layer::scrollbar_geometry(resolved),
-                base_layer::resizable_theme(resolved),
-            )
-        })
-    else {
-        return;
-    };
-    base_layer::apply_overrides(&geometry, resizable, cx);
-}
-
-/// Re-asserts Breeze's focus, panel, accent and selection treatment over a
-/// reloaded config:
-///
-/// - Breeze draws focus as a 1px border, not an outer ring.
-/// - The app paints panels (the log pane) with `muted`, which Breeze fills
-///   with the view background; the connector derives `muted` from the window
-///   fill instead.
-/// - The app tints hovered menu items with the live selection color at
-///   [`ACCENT_ALPHA`]; the connector uses Breeze's stated menu hover color.
-/// - Hovered table rows take that same selection tint, so table and menu
-///   hovers share one source instead of Breeze's separate list hover color.
-/// - KDE selections are solid where gpui-component clamps them to a wash.
-/// - KDE draws menus (and popovers) on the window background; the connector
-///   fills `popover` with the view background, a step darker in Breeze Dark.
-/// - Breeze separates rows with the alternating row shade; the connector
-///   falls back to the border color, which reads as a bright grid.
-///
-/// No-op unless the connector installed a native theme.
-pub(crate) fn restore_breeze_traits(cx: &mut App) {
-    let Some((view_background, window_background, accent, row_separator)) = cx
-        .try_global::<native_theme_gpui::NativeTheme>()
-        .and_then(|native| native.resolved(cx))
-        .map(|resolved| {
-            (
-                rgba_to_hsla(resolved.defaults.surface_color),
-                rgba_to_hsla(resolved.defaults.background_color),
-                rgba_to_hsla(resolved.defaults.selection_background).opacity(ACCENT_ALPHA),
-                rgba_to_hsla(resolved.list.alternate_row_background),
-            )
-        })
-    else {
-        return;
-    };
-
-    // Set the token too, or reconcile restores the clamped alpha.
-    Theme::update(cx, |theme| {
-        theme.focus_ring = false;
-        theme.muted = view_background;
-        theme.popover = window_background;
-        theme.accent = accent;
-        theme.selection = theme.selection.alpha(1.);
-        theme.tokens.selection = theme.selection.into();
-        theme.tokens.table_hover = accent.into();
-        theme.table_row_border = row_separator;
-        theme.tokens.table_row_border = row_separator.into();
-    });
-}
-
-/// The connector's private `rgba_to_hsla` equivalent, for the model colours
-/// the app re-reads itself.
-fn rgba_to_hsla(color: native_theme_gpui::Rgba) -> Hsla {
-    gpui_kit::Rgba {
-        r: f32::from(color.r) / 255.0,
-        g: f32::from(color.g) / 255.0,
-        b: f32::from(color.b) / 255.0,
-        a: f32::from(color.a) / 255.0,
-    }
-    .into()
-}
-
-/// Whether the application runs on GPUI's deterministic test scheduler, which
-/// must not be woken by a portal answering from its own thread.
-fn is_test_scheduler(cx: &App) -> bool {
-    cx.background_executor()
-        .scheduler_executor()
-        .scheduler()
-        .as_test()
-        .is_some()
-}
-
-/// Whether the connector would select its KDE reader for `XDG_CURRENT_DESKTOP`
-/// (a colon-separated list). Delegates to the connector's own detection so the
+/// Whether the KDE reader would be selected for `XDG_CURRENT_DESKTOP` (a
+/// colon-separated list). Delegates to `native-theme`'s own detection so the
 /// guard and the reader cannot disagree (exact case, first recognized wins).
 #[cfg(target_os = "linux")]
 fn is_kde(desktop: Option<&str>) -> bool {
     desktop.is_some_and(|desktop| {
-        native_theme::detect::parse_linux_desktop(desktop) == native_theme_gpui::LinuxDesktop::Kde
+        native_theme::detect::parse_linux_desktop(desktop) == native_theme_iced::LinuxDesktop::Kde
     })
 }
 
-/// The connector only has a KDE reader on Linux.
+/// There is only a KDE reader on Linux.
 #[cfg(not(target_os = "linux"))]
 fn is_kde(_desktop: Option<&str>) -> bool {
     false
@@ -322,29 +253,16 @@ fn is_kde(_desktop: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::component::{Theme, ThemeMode, try_parse_color};
-    use gpui_kit::{TestAppContext, px};
     use native_theme::theme::{FontSize, FontStyle, ResolvedFontSpec};
-    use native_theme_gpui::{NativeTheme, Rgba, base_layer};
+    use native_theme_iced::Rgba;
 
     use super::{
-        AccessibilityPreferences, font_size_at_base_dpi, install_preset, install_scrollbar_styles,
-        is_kde, is_test_scheduler, normalize_resolved_fonts, restore_breeze_traits, rgba_to_hsla,
+        AccessibilityPreferences, font_size_at_base_dpi, is_kde, normalize_resolved_fonts, preset,
     };
-
-    /// The installed variant's scrollbar geometry through the connector's
-    /// public API; the styled `ScrollbarStyles` themselves are opaque.
-    fn installed_scrollbar(cx: &gpui_kit::App) -> base_layer::ScrollbarGeometry {
-        let resolved = cx
-            .global::<NativeTheme>()
-            .resolved(cx)
-            .expect("the preset install stores the resolved variant");
-        base_layer::scrollbar_geometry(resolved)
-    }
 
     #[test]
     #[cfg(target_os = "linux")]
-    fn is_kde_matches_the_connector_detection() {
+    fn is_kde_matches_the_native_theme_detection() {
         assert!(is_kde(Some("KDE")));
         assert!(is_kde(Some("KDE:GNOME")));
         assert!(!is_kde(Some("GNOME:KDE")));
@@ -361,7 +279,7 @@ mod tests {
             defined_size,
             weight: 400,
             style: FontStyle::Normal,
-            color: native_theme_gpui::Rgba::BLACK,
+            color: Rgba::BLACK,
         };
 
         // A 10 pt size resolved at a 192 display DPI is re-derived at the
@@ -379,8 +297,8 @@ mod tests {
 
     /// The pinned contract: at a display DPI of 192, `native-theme` resolves
     /// KDE's 10 pt body and mono fonts to 26.67 logical px; normalization
-    /// re-derives them at the base logical DPI so GPUI's window scale factor
-    /// is the only display-scale multiplier left.
+    /// re-derives them at the base logical DPI so the window scale factor is
+    /// the only display-scale multiplier left.
     #[test]
     #[cfg(target_os = "linux")]
     fn kde_point_fonts_resolved_at_display_dpi_are_normalized_to_base_dpi() {
@@ -411,12 +329,9 @@ mod tests {
 
         assert_eq!(resolved.defaults.font.size, 10.0 * 192.0 / 72.0);
         assert_eq!(resolved.defaults.mono_font.size, 10.0 * 192.0 / 72.0);
-        // The toolbar's Header source (`theme.list_head`), distinct from the
-        // popup's Window source.
-        assert_eq!(
-            resolved.list.header_background,
-            native_theme_gpui::Rgba::rgb(41, 44, 48)
-        );
+        // The toolbar's Header source, distinct from the popup's Window
+        // source.
+        assert_eq!(resolved.list.header_background, Rgba::rgb(41, 44, 48));
 
         normalize_resolved_fonts(&mut resolved);
 
@@ -424,120 +339,39 @@ mod tests {
         assert_eq!(resolved.defaults.mono_font.size, 10.0 * 96.0 / 72.0);
     }
 
-    #[gpui_kit::test]
-    fn test_scheduler_is_detected(cx: &mut TestAppContext) {
-        cx.update(|cx| assert!(is_test_scheduler(cx)));
-    }
+    #[test]
+    fn preset_selects_the_requested_variant_and_normalizes_it() {
+        let light = preset(&AccessibilityPreferences::default(), false);
+        assert!(!light.is_dark);
+        assert_eq!(light.name, "KDE Breeze");
+        let r = &light.resolved;
+        assert_eq!(r.defaults.background_color, Rgba::rgb(0xEF, 0xF0, 0xF1));
+        // 10 pt at the base logical DPI, independent of the display DPI.
+        assert_eq!(r.defaults.font.size, 10.0 * 96.0 / 72.0);
+        assert_eq!(r.defaults.mono_font.size, 10.0 * 96.0 / 72.0);
+        assert_eq!(r.scrollbar.groove_width, 16.0);
+        assert_eq!(r.scrollbar.thumb_width, 8.0);
+        assert_eq!(r.scrollbar.min_thumb_length, 20.0);
+        assert_eq!(r.scrollbar.track_color, Rgba::rgb(0xEF, 0xF0, 0xF1));
+        assert_eq!(r.scrollbar.thumb_color, Rgba::new(0x23, 0x26, 0x29, 128));
+        assert_eq!(r.scrollbar.thumb_hover_color, Rgba::rgb(0x3D, 0xAE, 0xE9));
+        assert_eq!(
+            r.scrollbar.thumb_active_color,
+            Some(r.scrollbar.thumb_hover_color)
+        );
 
-    #[gpui_kit::test]
-    fn init_is_a_no_op_under_the_test_scheduler(cx: &mut TestAppContext) {
-        cx.update(gpui_kit::init);
-
-        let sentinel = try_parse_color("#123456").unwrap();
-        cx.update(|cx| {
-            Theme::update(cx, |theme| theme.background = sentinel);
-            crate::system_theme::init(cx);
-
-            assert_eq!(Theme::global(cx).background, sentinel);
-            assert!(cx.try_global::<native_theme_gpui::NativeTheme>().is_none());
-        });
-    }
-
-    #[gpui_kit::test]
-    fn install_preset_selects_the_requested_variant(cx: &mut TestAppContext) {
-        cx.update(gpui_kit::init);
-
-        cx.update(|cx| install_preset(&AccessibilityPreferences::default(), false, cx));
-        cx.update(|cx| {
-            let theme = Theme::global(cx);
-            assert_eq!(theme.mode, ThemeMode::Light);
-            assert_eq!(theme.background, try_parse_color("#EFF0F1").unwrap());
-            assert_eq!(theme.theme_name().as_ref(), "KDE Breeze");
-            // 10 pt at the base logical DPI, independent of the display DPI.
-            assert_eq!(theme.font_size, px(10.0 * 96.0 / 72.0));
-            assert_eq!(theme.mono_font_size, px(10.0 * 96.0 / 72.0));
-        });
-        cx.update(|cx| {
-            let g = installed_scrollbar(cx);
-            assert_eq!(g.track_width, px(16.));
-            assert_eq!(g.thumb_width, px(8.));
-            assert_eq!(g.thumb_inset, px(4.)); // centred in the 16 px rail
-            assert_eq!(g.min_thumb_length, px(20.));
-            assert_eq!(g.track, try_parse_color("#EFF0F1").unwrap());
-            assert_eq!(g.thumb, rgba_to_hsla(Rgba::new(0x23, 0x26, 0x29, 128)));
-            assert_eq!(g.thumb_active, g.thumb_hover);
-            assert_eq!(g.thumb_hover, try_parse_color("#3DAEE9").unwrap());
-
-            let theme = Theme::global(cx);
-            assert_eq!(theme.scrollbar, g.track);
-            assert_eq!(theme.tokens.scrollbar_thumb.color, g.thumb);
-            assert_eq!(theme.tokens.scrollbar_thumb_hover.color, g.thumb_hover);
-        });
-
-        cx.update(|cx| install_preset(&AccessibilityPreferences::default(), true, cx));
-        cx.update(|cx| {
-            let theme = Theme::global(cx);
-            assert_eq!(theme.mode, ThemeMode::Dark);
-            assert_eq!(theme.background, try_parse_color("#202326").unwrap());
-            assert_eq!(theme.font_size, px(10.0 * 96.0 / 72.0));
-            assert_eq!(theme.mono_font_size, px(10.0 * 96.0 / 72.0));
-        });
-        cx.update(|cx| {
-            let g = installed_scrollbar(cx);
-            assert_eq!(g.track_width, px(16.));
-            assert_eq!(g.thumb_width, px(8.));
-            assert_eq!(g.thumb_inset, px(4.));
-            assert_eq!(g.min_thumb_length, px(20.));
-            assert_eq!(g.track, try_parse_color("#202326").unwrap());
-            assert_eq!(g.thumb, rgba_to_hsla(Rgba::new(0xfc, 0xfc, 0xfc, 128)));
-            assert_eq!(g.thumb_active, g.thumb_hover);
-            assert_eq!(g.thumb_hover, try_parse_color("#3DAEE9").unwrap());
-
-            let theme = Theme::global(cx);
-            assert_eq!(theme.scrollbar, g.track);
-            assert_eq!(theme.tokens.scrollbar_thumb.color, g.thumb);
-            assert_eq!(theme.tokens.scrollbar_thumb_hover.color, g.thumb_hover);
-        });
-
-        cx.update(restore_breeze_traits);
-        cx.update(|cx| {
-            let theme = Theme::global(cx);
-            assert!(!theme.focus_ring);
-            assert_eq!(theme.muted, try_parse_color("#141618").unwrap());
-            // KDE menus draw the window background, not the connector's
-            // view-background popover fill.
-            assert_eq!(theme.popover, try_parse_color("#202326").unwrap());
-            let selection = try_parse_color("#3DAEE9").unwrap();
-            assert_eq!(theme.accent, selection.opacity(0.3));
-            assert_eq!(theme.selection.a, 1.0);
-            assert_eq!(theme.tokens.selection.color, theme.selection);
-            assert_eq!(theme.tokens.table_hover.color, theme.accent);
-            // Row separators take Breeze's alternate row shade, not the
-            // connector's brighter border-colour fallback.
-            assert_eq!(theme.table_row_border, try_parse_color("#2A2E32").unwrap());
-            assert_eq!(theme.tokens.table_row_border.color, theme.table_row_border);
-        });
-    }
-
-    /// The pin re-writes the connector's values after install. The scrollbar
-    /// styles are opaque, so the shared resize-handle write is the observable
-    /// result (`base_layer::apply_overrides` writes both).
-    #[gpui_kit::test]
-    fn install_scrollbar_styles_pins_the_connector_values(cx: &mut TestAppContext) {
-        cx.update(gpui_kit::init);
-        cx.update(|cx| install_preset(&AccessibilityPreferences::default(), true, cx));
-
-        cx.update(|cx| {
-            let expected = base_layer::resizable_theme(
-                cx.global::<NativeTheme>()
-                    .resolved(cx)
-                    .expect("the preset install stores the resolved variant"),
-            );
-            install_scrollbar_styles(cx);
-            assert_eq!(
-                gpui_kit::base::Theme::global(cx).resizable.handle,
-                expected.handle
-            );
-        });
+        let dark = preset(&AccessibilityPreferences::default(), true);
+        assert!(dark.is_dark);
+        let r = &dark.resolved;
+        assert_eq!(r.defaults.background_color, Rgba::rgb(0x20, 0x23, 0x26));
+        assert_eq!(r.defaults.font.size, 10.0 * 96.0 / 72.0);
+        assert_eq!(r.defaults.mono_font.size, 10.0 * 96.0 / 72.0);
+        assert_eq!(r.scrollbar.track_color, Rgba::rgb(0x20, 0x23, 0x26));
+        assert_eq!(r.scrollbar.thumb_color, Rgba::new(0xfc, 0xfc, 0xfc, 128));
+        assert_eq!(r.scrollbar.thumb_hover_color, Rgba::rgb(0x3D, 0xAE, 0xE9));
+        assert_eq!(
+            r.scrollbar.thumb_active_color,
+            Some(r.scrollbar.thumb_hover_color)
+        );
     }
 }
