@@ -151,20 +151,20 @@ fn menu_bar_style(theme: &Theme, status: iced_aw::style::Status) -> iced_aw::sty
 pub fn row_context_menu<'a>(cache_exists: bool) -> Element<'a, Message> {
     let t = tokens();
     let mut entries: Vec<Element<'a, Message>> = vec![
-        item("Browse for executable...", None, Some(Message::MenuOpened)),
+        item("Browse for executable...", None, Some(Message::Browse)),
         separator(),
     ];
-    for (name, _tool) in TOOL_BUTTONS {
-        entries.push(item(name, None, Some(Message::MenuOpened)));
+    for (name, tool) in TOOL_BUTTONS {
+        entries.push(item(name, None, Some(Message::LaunchTool(tool))));
     }
     entries.push(separator());
-    entries.push(item("Copy compatdata path", None, Some(Message::MenuOpened)));
-    entries.push(item("Copy compatibility tool path", None, Some(Message::MenuOpened)));
+    entries.push(item("Copy compatdata path", None, Some(Message::CopyCompatDataPath)));
+    entries.push(item("Copy compatibility tool path", None, Some(Message::CopyToolPath)));
     entries.push(separator());
     entries.push(item(
         "Delete Shader Cache",
         None,
-        cache_exists.then_some(Message::MenuOpened),
+        cache_exists.then_some(Message::ConfirmDeleteShaderCache),
     ));
 
     container(column(entries))

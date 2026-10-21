@@ -11,6 +11,7 @@
 
 mod app;
 mod assets;
+mod background;
 mod config;
 mod flatpak;
 mod games;

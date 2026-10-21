@@ -115,11 +115,15 @@ fn table_pane(state: &State) -> Element<'_, Message> {
 /// Browse plus the four Wine tools; all need a selected game.
 fn action_row(state: &State) -> Element<'_, Message> {
     let enabled = state.selected.is_some();
-    let action = |text: &'static str| {
-        widgets::outline_button(text, None, enabled.then_some(Message::MenuOpened), false).into()
+    let action = |text: &'static str, message: Message| {
+        widgets::outline_button(text, None, enabled.then_some(message), false).into()
     };
-    let mut buttons: Vec<Element<'_, Message>> = vec![action("Browse...")];
-    buttons.extend(TOOL_BUTTONS.iter().map(|(name, _tool)| action(name)));
+    let mut buttons: Vec<Element<'_, Message>> = vec![action("Browse...", Message::Browse)];
+    buttons.extend(
+        TOOL_BUTTONS
+            .iter()
+            .map(|(name, tool)| action(name, Message::LaunchTool(tool))),
+    );
     row(buttons).spacing(tokens().rem(1.0)).into()
 }
 
@@ -133,8 +137,10 @@ fn status_bar(state: &State) -> Element<'_, Message> {
 
     let t = tokens();
     let mut left = row![].spacing(t.rem(2.0)).align_y(Alignment::Center);
+    // The Qt status bar showed an indeterminate progress bar while a launch
+    // was in flight.
     if state.launch_running {
-        left = left.push(label("…"));
+        left = left.push(state.spinner.view(state.spinner_elapsed, state.reduce_motion));
     }
     left = left.push(label(state.status_text.as_str()));
 

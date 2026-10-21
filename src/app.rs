@@ -9,9 +9,13 @@
 //! while `loading` is set, so two scans can never overlap and a completion
 //! never needs a stale-generation check.
 
-use iced::widget::{Id, operation, pane_grid, scrollable, text_editor};
-use iced::{Size, Subscription, Task, event, keyboard, mouse, window};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
+use iced::widget::{Id, operation, pane_grid, scrollable, text_editor};
+use iced::{Size, Subscription, Task, clipboard, event, keyboard, mouse, window};
+
+use crate::background::{self, BrowseOutcome, LaunchEvent, LaunchFeed};
 use crate::games::{self, ColumnSort, GameRow};
 use crate::views::logs_ui::LogState;
 use crate::views::table::{self, GameColumn, TableView};
@@ -128,6 +132,19 @@ pub enum Message {
     LogAction(text_editor::Action),
     LogScrolled(scrollable::Viewport),
     LogResized(Size),
+
+    // ---- Actions ----
+    /// Launch a built-in Wine tool (the launcher's tool id) in the selected
+    /// game's prefix.
+    LaunchTool(&'static str),
+    Browse,
+    BrowseFinished(BrowseOutcome),
+    CopyCompatDataPath,
+    CopyToolPath,
+    ConfirmDeleteShaderCache,
+    /// A batch of launch output and exits from the reader/watcher threads.
+    LaunchEvents(Vec<LaunchEvent>),
+    SpinnerTick(Instant),
 }
 
 pub struct State {
@@ -171,7 +188,20 @@ pub struct State {
     pub status_text: String,
     pub loading: bool,
     pub remember_last_dir: bool,
+
+    // ---- Launches ----
     pub launch_running: bool,
+    pub active_launches: usize,
+    /// The newest launch owns the status text.
+    pub launch_generation: u64,
+    launch_sender: async_channel::Sender<LaunchEvent>,
+    launch_feed: LaunchFeed,
+    pub spinner: native_theme_iced::Spinner,
+    spinner_started: Instant,
+    pub spinner_elapsed: Duration,
+    pub reduce_motion: bool,
+    /// Single-flight flag for the portal file chooser.
+    pub browsing: bool,
 
     pub theme: iced::Theme,
 }
@@ -199,6 +229,9 @@ impl State {
         };
         let panes = pane_grid::State::with_configuration(configuration);
         let split = panes.layout().splits().next().copied();
+        let (launch_sender, launch_receiver) =
+            async_channel::bounded(background::LAUNCH_EVENT_CAPACITY);
+        let t = crate::theme::tokens();
 
         let mut state = Self {
             main_window,
@@ -224,6 +257,15 @@ impl State {
             loading: false,
             remember_last_dir: crate::config::load_config().remember_last_dir,
             launch_running: false,
+            active_launches: 0,
+            launch_generation: 0,
+            launch_sender,
+            launch_feed: LaunchFeed(launch_receiver),
+            spinner: status_spinner(&t.resolved),
+            spinner_started: Instant::now(),
+            spinner_elapsed: Duration::ZERO,
+            reduce_motion: t.reduce_motion,
+            browsing: false,
             theme: iced::Theme::Dark,
         };
         state.sync_table();
@@ -251,7 +293,15 @@ impl State {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        event::listen_with(window_input).map(|(window, input)| Message::Window(window, input))
+        let mut subscriptions = vec![
+            event::listen_with(window_input).map(|(window, input)| Message::Window(window, input)),
+            Subscription::run_with(self.launch_feed.clone(), background::launch_batches)
+                .map(Message::LaunchEvents),
+        ];
+        if self.launch_running {
+            subscriptions.push(Subscription::run(background::spinner_ticks).map(Message::SpinnerTick));
+        }
+        Subscription::batch(subscriptions)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -345,6 +395,34 @@ impl State {
                 self.log.resized(size);
                 Task::none()
             }
+
+            Message::LaunchTool(tool) => self.launch_tool(tool),
+            Message::Browse => self.browse(),
+            Message::BrowseFinished(outcome) => self.browse_finished(outcome),
+            Message::CopyCompatDataPath => {
+                let Some(row) = self.selected_row() else {
+                    return Task::none();
+                };
+                let path =
+                    crate::steam::paths::app_compatdata_dir(Path::new(&row.library_path), row.app_id);
+                copy_to_clipboard(path.to_string_lossy().into_owned())
+            }
+            Message::CopyToolPath => match self.selected_row() {
+                Some(row) => copy_to_clipboard(row.proton_dir.clone()),
+                None => Task::none(),
+            },
+            Message::ConfirmDeleteShaderCache => Task::none(),
+            Message::LaunchEvents(events) => {
+                let tasks: Vec<_> = events
+                    .into_iter()
+                    .map(|event| self.launch_event(event))
+                    .collect();
+                Task::batch(tasks)
+            }
+            Message::SpinnerTick(now) => {
+                self.spinner_elapsed = now.saturating_duration_since(self.spinner_started);
+                Task::none()
+            }
         }
     }
 
@@ -362,9 +440,180 @@ impl State {
                 }
             }
             WindowInput::Closed if is_main => return iced::exit(),
+            WindowInput::Key { key, modifiers } if is_main => return self.shortcut(&key, modifiers),
             _ => {}
         }
         Task::none()
+    }
+
+    /// The global shortcuts: F5 refreshes, Ctrl+C copies the log selection,
+    /// Ctrl+A selects the whole log (and focuses it so the selection shows),
+    /// Ctrl+L clears it.
+    fn shortcut(&mut self, key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Task<Message> {
+        use keyboard::key::Named;
+        match key.as_ref() {
+            keyboard::Key::Named(Named::F5) => self.refresh(),
+            keyboard::Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("c") => {
+                match self.log.selection() {
+                    Some(text) => clipboard::write(text),
+                    None => Task::none(),
+                }
+            }
+            keyboard::Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("a") => {
+                self.log.select_all()
+            }
+            keyboard::Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("l") => {
+                self.log.clear();
+                Task::none()
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// The selected row, surfacing the standard "No game selected" error
+    /// when there is none.
+    fn require_selected_game(&mut self) -> Result<crate::models::Game, Task<Message>> {
+        match self.selected_row() {
+            Some(row) => Ok(row.to_game()),
+            None => Err(self.show_error("No game selected")),
+        }
+    }
+
+    /// Launch a built-in Wine tool in the selected game's prefix.
+    fn launch_tool(&mut self, tool: &'static str) -> Task<Message> {
+        let game = match self.require_selected_game() {
+            Ok(game) => game,
+            Err(task) => return task,
+        };
+        match crate::launcher::launch_tool(&game, tool) {
+            Ok(process) => self.start_launch(process, format!("Running {tool}...")),
+            Err(error) => self.show_error(format!("Failed to launch {tool}: {error}")),
+        }
+    }
+
+    /// Pick a Windows executable through the XDG desktop portal and run it in
+    /// the selected game's prefix. The portal dialog is not modal, so only
+    /// one request may be in flight.
+    fn browse(&mut self) -> Task<Message> {
+        if self.browsing {
+            return Task::none();
+        }
+        self.browsing = true;
+        // Seed the dialog at the last directory when the preference is on.
+        let initial_dir = if self.remember_last_dir {
+            crate::config::load_last_dir()
+        } else {
+            None
+        };
+        Task::perform(background::pick_executable(initial_dir), Message::BrowseFinished)
+    }
+
+    fn browse_finished(&mut self, outcome: BrowseOutcome) -> Task<Message> {
+        // Every completion (picked, cancelled, failed) frees the next browse.
+        self.browsing = false;
+        match outcome {
+            BrowseOutcome::Picked(path) => {
+                // Remember the directory (not the file) for the next open.
+                if self.remember_last_dir
+                    && let Some(parent) = path.parent()
+                    && let Err(error) = crate::config::save_last_dir(parent)
+                {
+                    eprintln!("protonctx: failed to save last directory: {error}");
+                }
+                self.launch_browsed(path)
+            }
+            BrowseOutcome::Nothing => Task::none(),
+            BrowseOutcome::Failed(error) => {
+                self.show_error(format!("Failed to open file dialog: {error}"))
+            }
+        }
+    }
+
+    fn launch_browsed(&mut self, path: PathBuf) -> Task<Message> {
+        let game = match self.require_selected_game() {
+            Ok(game) => game,
+            Err(task) => return task,
+        };
+        let display = path.to_string_lossy().into_owned();
+        match crate::launcher::proton::run_in_prefix(&game, &[&display]) {
+            Ok(process) => self.start_launch(process, format!("Running {display}...")),
+            Err(error) => self.show_error(format!("Failed to launch: {error}")),
+        }
+    }
+
+    /// Mark a launch as running, log its command line, and start the pipe
+    /// readers and the exit watcher.
+    fn start_launch(
+        &mut self,
+        mut process: crate::launcher::LaunchedProcess,
+        status: String,
+    ) -> Task<Message> {
+        self.launch_generation = self.launch_generation.wrapping_add(1);
+        self.active_launches = self.active_launches.saturating_add(1);
+        if !self.launch_running {
+            self.spinner_started = Instant::now();
+            self.spinner_elapsed = Duration::ZERO;
+        }
+        self.launch_running = true;
+        self.status_text = status;
+        let logged = self.append_log(format!("Starting {}", process.command_line));
+
+        let generation = self.launch_generation;
+        background::stream_pipe(process.child.stdout.take(), self.launch_sender.clone());
+        background::stream_pipe(process.child.stderr.take(), self.launch_sender.clone());
+        if let Err(error) =
+            background::watch_exit(process.child, generation, self.launch_sender.clone())
+        {
+            // The child is already running, but without the watcher it is
+            // never reaped and `active_launches` never decrements; clear the
+            // launch state so the spinner cannot wedge.
+            let failed = self.handle_watcher_spawn_failure(&error, generation);
+            return Task::batch([logged, failed]);
+        }
+        logged
+    }
+
+    /// Clear the launch bookkeeping when the exit-watcher thread could not be
+    /// spawned, and surface the failure in the log and the status bar.
+    pub fn handle_watcher_spawn_failure(
+        &mut self,
+        error: &std::io::Error,
+        generation: u64,
+    ) -> Task<Message> {
+        self.finish_launch(
+            generation,
+            format!("Launch error: failed to start watcher: {error}"),
+        )
+    }
+
+    /// Apply one launch completion: count it down, log `message`, and let the
+    /// newest launch own the status text.
+    fn finish_launch(&mut self, generation: u64, message: String) -> Task<Message> {
+        self.active_launches = self.active_launches.saturating_sub(1);
+        self.launch_running = self.active_launches > 0;
+        let logged = self.append_log(message.clone());
+        // A newer launch superseded this one for the status text; every
+        // process still logs its own exit.
+        if generation == self.launch_generation {
+            self.status_text = message;
+        }
+        logged
+    }
+
+    fn launch_event(&mut self, event: LaunchEvent) -> Task<Message> {
+        match event {
+            LaunchEvent::Line { text } => self.append_log(text),
+            LaunchEvent::Exited { generation, result } => {
+                self.finish_launch(generation, background::exit_message(&result))
+            }
+        }
+    }
+
+    /// Log a failure and show it in the Launch Error dialog; the dialog is
+    /// transient, so the log keeps the history.
+    pub fn show_error(&mut self, message: impl Into<String>) -> Task<Message> {
+        let message = message.into();
+        self.append_log(format!("Launch error: {message}"))
     }
 
     /// Re-run Steam discovery, preserving the table's current sort order.
@@ -510,6 +759,24 @@ impl State {
     }
 }
 
+/// Write non-empty `text` to the clipboard; an empty value means there is
+/// nothing to copy (the two copy-path actions share this rule).
+fn copy_to_clipboard(text: String) -> Task<Message> {
+    if text.is_empty() {
+        Task::none()
+    } else {
+        clipboard::write(text)
+    }
+}
+
+/// The status-bar spinner: the Lucide indicator in the theme's spinner
+/// colour, at the text size rather than the theme's 36 px diameter.
+fn status_spinner(resolved: &native_theme::theme::ResolvedTheme) -> native_theme_iced::Spinner {
+    let mut resolved = resolved.clone();
+    resolved.spinner.diameter = crate::theme::tokens().font_size + 2.0;
+    native_theme_iced::Spinner::new(&resolved, native_theme::theme::IconSet::Lucide, None)
+}
+
 /// The main window: 760×520, centred, server-side decorations, the desktop
 /// file's app id so the compositor resolves the icon.
 fn main_window_settings() -> window::Settings {
@@ -548,4 +815,91 @@ fn window_input(
         _ => return None,
     };
     Some((window, input))
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::futures::StreamExt as _;
+    use iced::window;
+
+    use super::{Message, State};
+    use crate::background;
+    use crate::games::GameRow;
+    use crate::test_support::{game, temp_dir};
+
+    /// A game whose `proton` is a shell script printing to both pipes and
+    /// exiting with `code`.
+    fn fake_proton_game(tag: &str, code: i32) -> (GameRow, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = temp_dir(tag);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("proton");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho \"out $2\"\necho \"err $2\" >&2\nexit {code}\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let row = GameRow::from_game(&game(
+            "Fake",
+            4242,
+            "proton_experimental",
+            dir.to_str().unwrap(),
+            dir.to_str().unwrap(),
+        ));
+        (row, dir)
+    }
+
+    /// Feed launch batches into `state` until no launch is running.
+    fn drain_launches(state: &mut State) {
+        let mut batches = Box::pin(background::launch_batches(&state.launch_feed));
+        while state.launch_running {
+            let batch = iced::futures::executor::block_on(batches.next()).unwrap();
+            let _ = state.update(Message::LaunchEvents(batch));
+        }
+    }
+
+    #[test]
+    fn launch_streams_output_and_reports_the_exit_code() {
+        let (row, dir) = fake_proton_game("launch_exit", 3);
+        let mut state = State::with_main_window(window::Id::unique());
+        state.set_rows(vec![row]);
+        state.select_row(Some(0));
+
+        let _ = state.update(Message::LaunchTool("winecfg"));
+        assert!(state.launch_running);
+        assert_eq!(state.status_text, "Running winecfg...");
+        assert!(state.log.text().contains("Starting "), "{}", state.log.text());
+
+        drain_launches(&mut state);
+        let log = state.log.text();
+        assert!(log.contains("] out winecfg\n"), "{log}");
+        assert!(log.contains("] err winecfg\n"), "{log}");
+        assert!(log.contains("] Exit code: 3\n"), "{log}");
+        assert_eq!(state.status_text, "Exit code: 3");
+        assert_eq!(state.active_launches, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn newest_launch_owns_the_status_text() {
+        let (row, dir) = fake_proton_game("launch_generation", 0);
+        let mut state = State::with_main_window(window::Id::unique());
+        state.set_rows(vec![row]);
+        state.select_row(Some(0));
+        let _ = state.update(Message::LaunchTool("winecfg"));
+        let _ = state.update(Message::LaunchTool("regedit"));
+        assert_eq!(state.active_launches, 2);
+        assert_eq!(state.launch_generation, 2);
+
+        // The older launch finishing does not clobber the newer status.
+        let _ = state.update(Message::LaunchEvents(vec![background::LaunchEvent::Exited {
+            generation: 1,
+            result: Err("gone".to_string()),
+        }]));
+        assert_eq!(state.status_text, "Running regedit...");
+        assert!(state.launch_running);
+        drain_launches(&mut state);
+        std::fs::remove_dir_all(dir).ok();
+    }
 }

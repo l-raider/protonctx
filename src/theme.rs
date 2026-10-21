@@ -37,6 +37,8 @@ pub const HEADER_WEIGHT: Weight = Weight::Medium;
 #[derive(Clone, Debug)]
 pub struct AppTokens {
     pub is_dark: bool,
+    /// The desktop's reduced-motion preference (the spinner stands still).
+    pub reduce_motion: bool,
     /// The resolved theme itself, for `native-theme-iced` style functions.
     pub resolved: ResolvedTheme,
 
@@ -253,6 +255,7 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
 
     AppTokens {
         is_dark: loaded.is_dark,
+        reduce_motion: loaded.prefs.reduce_motion,
         resolved: r.clone(),
 
         background,
