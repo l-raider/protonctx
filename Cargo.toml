@@ -121,3 +121,11 @@ assets = [
     { source = "packaging/icons/hicolor/256x256/apps/protonctx.png", dest = "/usr/share/icons/hicolor/256x256/apps/protonctx.png", mode = "644" },
     { source = "packaging/icons/hicolor/scalable/apps/protonctx.svg", dest = "/usr/share/icons/hicolor/scalable/apps/protonctx.svg", mode = "644" },
 ]
+
+# Dev builds keep protonctx itself at opt-level 0 for fast incremental
+# rebuilds, but optimize every dependency: at opt-level 0 the tiny-skia /
+# cosmic-text / swash rendering stack takes ~340 ms per full frame and
+# hovering pegs a core (tiny-skia alone at opt-level 2 only reached ~270 ms;
+# all dependencies reach ~25 ms). Only clean builds pay for it.
+[profile.dev.package."*"]
+opt-level = 2

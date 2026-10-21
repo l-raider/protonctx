@@ -85,14 +85,17 @@ impl LogState {
     }
 
     /// The shadow text: every line, each ending in `\n`.
+    #[cfg(test)]
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    #[cfg(test)]
     pub fn line_count(&self) -> usize {
         self.lines
     }
 
+    #[cfg(test)]
     pub fn is_following(&self) -> bool {
         self.follow
     }

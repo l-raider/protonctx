@@ -120,3 +120,60 @@ fn visual_dialogs() {
         save(&mut sim, &theme, name);
     }
 }
+
+/// A hover sweep over the table, timed per phase: building the view and its
+/// layout for every cursor step, applying the produced messages, and drawing.
+#[test]
+#[ignore]
+fn bench_hover_sweep() {
+    use std::time::{Duration, Instant};
+
+    let mut state = state();
+    let theme = state.theme.clone();
+    let id = state.main_window;
+    let (mut build, mut events, mut draw) = (Duration::ZERO, Duration::ZERO, Duration::ZERO);
+    let steps = 120;
+    for step in 0..steps {
+        let y = 50.0 + (step % 6) as f32 * 28.0 + (step / 6) as f32;
+        let started = Instant::now();
+        let mut sim = Simulator::with_size(Default::default(), SIZE, state.view(id));
+        build += started.elapsed();
+
+        let started = Instant::now();
+        move_to(&mut sim, Point::new(200.0, y));
+        let messages: Vec<Message> = sim.into_messages().collect();
+        for message in messages {
+            let _ = state.update(message);
+        }
+        events += started.elapsed();
+
+        let mut sim = Simulator::with_size(Default::default(), SIZE, state.view(id));
+        let started = Instant::now();
+        let _ = sim.snapshot(&theme);
+        draw += started.elapsed();
+    }
+    let per = |d: Duration| d.as_secs_f64() * 1000.0 / f64::from(steps);
+    println!(
+        "per step: build+layout {:.2} ms, events+update {:.2} ms, draw(2x full) {:.2} ms",
+        per(build),
+        per(events),
+        per(draw)
+    );
+}
+
+#[test]
+#[ignore]
+fn probe_menu_messages() {
+    let state = state();
+    let id = state.main_window;
+    let mut sim = Simulator::with_size(Default::default(), SIZE, state.view(id));
+    move_to(&mut sim, Point::new(16.0, 16.0));
+    let _ = sim.simulate(iced_test::simulator::click());
+    move_to(&mut sim, Point::new(40.0, 68.0));
+    let _ = sim.simulate(iced_test::simulator::click());
+    move_to(&mut sim, Point::new(400.0, 300.0));
+    let theme = state.theme.clone();
+    save(&mut sim, &theme, "menu-after-click");
+    let messages: Vec<_> = sim.into_messages().collect();
+    println!("messages: {messages:?}");
+}

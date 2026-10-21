@@ -56,7 +56,9 @@ fn toolbar(state: &State) -> Element<'_, Message> {
     let refresh = widgets::toolbar_button(
         row![
             icon(Icon::RefreshCw, t.font_size),
-            label("Refresh games").size(t.small_font_size())
+            // The base size (KDE 10 pt), as Qt toolbuttons use; gpui's
+            // 0.875 rem rendered too light with tiny-skia's greyscale AA.
+            label("Refresh games")
         ]
         .spacing(t.rem(2.0))
         .align_y(Alignment::Center),

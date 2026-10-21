@@ -148,6 +148,19 @@ pub fn icon_label<'a>(leading: Option<Icon>, content: &'a str) -> Element<'a, Me
     }
 }
 
+/// The status to style an enabled-or-not button with.
+///
+/// iced 0.14 only learns a button's status from a redraw event and falls back
+/// to `Disabled` until then; an open `iced_aw` menu overlay captures those
+/// events, so enabled buttons beneath it would paint as disabled. A button
+/// with an action is never disabled, so that fallback is mapped back.
+pub fn effective_status(status: button::Status, enabled: bool) -> button::Status {
+    match status {
+        button::Status::Disabled if enabled => button::Status::Active,
+        status => status,
+    }
+}
+
 /// The Breeze outline button used by the action row and every dialog action:
 /// an optional leading icon and a label, 32 px high, at least 80 px wide.
 ///
@@ -169,6 +182,7 @@ pub fn outline_button<'a>(
         0.0
     };
     let content_width = text_width(text_value, t.font, t.font_size) + icon_width;
+    let enabled = on_press.is_some();
     let width = (content_width + 2.0 * BUTTON_PADDING_X)
         .ceil()
         .max(BUTTON_MIN_WIDTH);
@@ -182,8 +196,10 @@ pub fn outline_button<'a>(
     .width(width)
     .height(BUTTON_HEIGHT)
     .padding(0)
+    .style(move |_theme: &Theme, status| {
+        outline_style(effective_status(status, enabled), default_focus)
+    })
     .on_press_maybe(on_press)
-    .style(move |_theme: &Theme, status| outline_style(status, default_focus))
 }
 
 /// The outline button's appearance in `status`.
@@ -242,11 +258,12 @@ pub fn toolbar_button<'a>(
     if padding_x <= 0.0 {
         inner = inner.width(height).align_x(iced::Alignment::Center);
     }
+    let enabled = on_press.is_some();
     button(inner)
         .height(height)
         .padding([0.0, padding_x])
         .on_press_maybe(on_press)
-        .style(|_theme: &Theme, status| toolbar_style(status))
+        .style(move |_theme: &Theme, status| toolbar_style(effective_status(status, enabled)))
 }
 
 /// The toolbar button's appearance in `status`.
@@ -289,28 +306,48 @@ pub fn scrollbar() -> scrollable::Scrollbar {
 /// alpha as the resting handle, the selection while hovered or dragged.
 pub fn scrollable_style(_theme: &Theme, status: scrollable::Status) -> scrollable::Style {
     let t = tokens();
-    let (v_hot, h_hot) = match status {
-        scrollable::Status::Active { .. } => (false, false),
+    let (v_thumb, h_thumb) = match status {
+        scrollable::Status::Active { .. } => (t.scrollbar_thumb, t.scrollbar_thumb),
         scrollable::Status::Hovered {
             is_vertical_scrollbar_hovered,
             is_horizontal_scrollbar_hovered,
             ..
-        } => (is_vertical_scrollbar_hovered, is_horizontal_scrollbar_hovered),
+        } => {
+            let hot = |hovered: bool| {
+                if hovered {
+                    t.scrollbar_thumb_hover
+                } else {
+                    t.scrollbar_thumb
+                }
+            };
+            (
+                hot(is_vertical_scrollbar_hovered),
+                hot(is_horizontal_scrollbar_hovered),
+            )
+        }
         scrollable::Status::Dragged {
             is_vertical_scrollbar_dragged,
             is_horizontal_scrollbar_dragged,
             ..
-        } => (is_vertical_scrollbar_dragged, is_horizontal_scrollbar_dragged),
+        } => {
+            let grabbed = |dragged: bool| {
+                if dragged {
+                    t.scrollbar_thumb_active
+                } else {
+                    t.scrollbar_thumb
+                }
+            };
+            (
+                grabbed(is_vertical_scrollbar_dragged),
+                grabbed(is_horizontal_scrollbar_dragged),
+            )
+        }
     };
-    let rail = |hot: bool| scrollable::Rail {
+    let rail = |thumb: Color| scrollable::Rail {
         background: Some(Background::Color(t.scrollbar_track)),
         border: Border::default(),
         scroller: scrollable::Scroller {
-            background: Background::Color(if hot {
-                t.scrollbar_thumb_hover
-            } else {
-                t.scrollbar_thumb
-            }),
+            background: Background::Color(thumb),
             border: Border {
                 radius: (t.scroller_width / 2.0).into(),
                 ..Border::default()
@@ -320,8 +357,8 @@ pub fn scrollable_style(_theme: &Theme, status: scrollable::Status) -> scrollabl
     let default = scrollable::default(_theme, status);
     scrollable::Style {
         container: iced::widget::container::Style::default(),
-        vertical_rail: rail(v_hot),
-        horizontal_rail: rail(h_hot),
+        vertical_rail: rail(v_thumb),
+        horizontal_rail: rail(h_thumb),
         gap: Some(Background::Color(t.scrollbar_track)),
         auto_scroll: default.auto_scroll,
     }

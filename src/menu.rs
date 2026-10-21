@@ -4,7 +4,7 @@
 //! hover tint cannot drift apart.
 
 use iced::widget::{Space, button, column, container, row};
-use iced::{Alignment, Background, Border, Element, Length, Shadow, Theme, Vector};
+use iced::{Alignment, Background, Border, Element, Length, Shadow, Theme};
 use iced_aw::menu::{DrawPath, Item, Menu, MenuBar};
 
 use crate::app::Message;
@@ -28,17 +28,20 @@ fn item<'a>(text: &'a str, leading: Option<Icon>, on_press: Option<Message>) -> 
     let t = tokens();
     let content: Element<'a, Message> = match leading {
         Some(leading) => row![icon(leading, t.font_size - 2.0), label(text)]
-            .spacing(6)
+            .spacing(t.rem(1.0))
             .align_y(Alignment::Center)
             .into(),
         None => label(text).into(),
     };
+    let enabled = on_press.is_some();
     button(container(content).height(Length::Fill).align_y(Alignment::Center))
         .width(Length::Fill)
         .height(ITEM_HEIGHT)
         .padding([0, 8])
         .on_press_maybe(on_press)
-        .style(|_theme: &Theme, status| item_style(status))
+        .style(move |_theme: &Theme, status| {
+            item_style(widgets::effective_status(status, enabled))
+        })
         .into()
 }
 
@@ -84,22 +87,16 @@ fn separator<'a>() -> Element<'a, Message> {
     .into()
 }
 
-/// The popup panel: the window fill (KDE draws menus on it), the frame
-/// colour, rounded, with a soft shadow.
+/// The popup panel: the window fill (KDE draws menus on it) and the frame
+/// colour, rounded. No drop shadow: iced_tiny_skia's damage tracking only
+/// repaints a quad's own bounds, so a shadow outside them smears and
+/// flickers as the menu repaints.
 fn panel_border() -> Border {
     let t = tokens();
     Border {
         color: t.border,
         width: 1.0,
         radius: t.radius.into(),
-    }
-}
-
-fn panel_shadow() -> Shadow {
-    Shadow {
-        color: iced::Color::from_rgba(0.0, 0.0, 0.0, 0.35),
-        offset: Vector::new(0.0, 2.0),
-        blur_radius: 8.0,
     }
 }
 
@@ -123,6 +120,10 @@ pub fn main_menu<'a>() -> Element<'a, Message> {
 
     MenuBar::new(vec![Item::with_menu(root, menu)])
         .draw_path(DrawPath::FakeHovering)
+        // iced_aw leaves both off by default: picking an item or clicking
+        // outside must close the menu, as in Qt.
+        .close_on_item_click_global(true)
+        .close_on_background_click_global(true)
         .padding(0)
         .spacing(0)
         .style(menu_bar_style)
@@ -140,7 +141,7 @@ fn menu_bar_style(theme: &Theme, status: iced_aw::style::Status) -> iced_aw::sty
         bar_shadow: Shadow::default(),
         menu_background: Background::Color(t.menu_background),
         menu_border: panel_border(),
-        menu_shadow: panel_shadow(),
+        menu_shadow: Shadow::default(),
         path: Background::Color(t.accent),
         ..native
     }
@@ -173,7 +174,6 @@ pub fn row_context_menu<'a>(cache_exists: bool) -> Element<'a, Message> {
         .style(move |_theme: &Theme| container::Style {
             background: Some(Background::Color(t.menu_background)),
             border: panel_border(),
-            shadow: panel_shadow(),
             ..container::Style::default()
         })
         .into()

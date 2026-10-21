@@ -36,7 +36,6 @@ pub const HEADER_WEIGHT: Weight = Weight::Medium;
 /// theme.
 #[derive(Clone, Debug)]
 pub struct AppTokens {
-    pub is_dark: bool,
     /// The desktop's reduced-motion preference (the spinner stands still).
     pub reduce_motion: bool,
     /// The resolved theme itself, for `native-theme-iced` style functions.
@@ -97,9 +96,6 @@ pub struct AppTokens {
     /// Popup menu fill: KDE draws menus on the window background.
     pub menu_background: Color,
     pub menu_foreground: Color,
-    pub menu_border: Color,
-    pub menu_border_width: f32,
-    pub menu_radius: f32,
 
     // ---- Scrollbars ----
     pub scrollbar_track: Color,
@@ -108,7 +104,6 @@ pub struct AppTokens {
     pub scrollbar_thumb_active: Color,
     pub scrollbar_width: f32,
     pub scroller_width: f32,
-    pub scrollbar_min_thumb: f32,
 
     // ---- Fonts ----
     pub font: Font,
@@ -127,10 +122,6 @@ impl AppTokens {
         (units * self.font_size / 4.0).round()
     }
 
-    /// gpui-kit's `text_sm`: 0.875 rem.
-    pub fn small_font_size(&self) -> f32 {
-        self.font_size * 0.875
-    }
 }
 
 static TOKENS: OnceLock<AppTokens> = OnceLock::new();
@@ -254,7 +245,6 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
     let mono_font = font_of(&d.mono_font);
 
     AppTokens {
-        is_dark: loaded.is_dark,
         reduce_motion: loaded.prefs.reduce_motion,
         resolved: r.clone(),
 
@@ -286,9 +276,6 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
 
         menu_background: background,
         menu_foreground: to_color(r.menu.font.color),
-        menu_border: to_color(r.menu.border.color),
-        menu_border_width: r.menu.border.line_width.max(0.0),
-        menu_radius: r.menu.border.corner_radius.max(0.0),
 
         scrollbar_track: to_color(r.scrollbar.track_color),
         scrollbar_thumb: to_color(r.scrollbar.thumb_color),
@@ -299,8 +286,9 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
                 .unwrap_or(r.scrollbar.thumb_hover_color),
         ),
         scrollbar_width: r.scrollbar.groove_width,
+        // Breeze's 20 px minimum handle length has no receiver: iced
+        // 0.14 fixes the scroller's minimum length itself.
         scroller_width: r.scrollbar.thumb_width,
-        scrollbar_min_thumb: r.scrollbar.min_thumb_length,
 
         font,
         font_size: native_theme_iced::font_size(r, &loaded.prefs),
@@ -344,7 +332,7 @@ mod tests {
         let loaded = preset(&Default::default(), true);
         let (theme, t) = build(&loaded);
 
-        assert!(t.is_dark);
+        assert!(loaded.is_dark);
         assert_close(t.background, hex(0x202326), "window background");
         assert_close(theme.palette().background, hex(0x202326), "iced palette");
         assert_close(t.muted, hex(0x141618), "view / muted");
@@ -375,7 +363,6 @@ mod tests {
         assert_close(t.menu_background, t.background, "menu background");
         assert_eq!(t.scrollbar_width, 16.0);
         assert_eq!(t.scroller_width, 8.0);
-        assert_eq!(t.scrollbar_min_thumb, 20.0);
         assert_eq!(t.font_size, 10.0 * 96.0 / 72.0);
         assert_eq!(t.mono_size, 10.0 * 96.0 / 72.0);
         assert_eq!(t.header_font.weight, iced::font::Weight::Medium);
@@ -396,9 +383,10 @@ mod tests {
 
     #[test]
     fn breeze_light_tokens_match_the_pinned_values() {
-        let t = build(&preset(&Default::default(), false)).1;
+        let loaded = preset(&Default::default(), false);
+        let t = build(&loaded).1;
 
-        assert!(!t.is_dark);
+        assert!(!loaded.is_dark);
         assert_close(t.background, hex(0xEFF0F1), "window background");
         assert_close(t.scrollbar_track, hex(0xEFF0F1), "scrollbar track");
         assert_close(
