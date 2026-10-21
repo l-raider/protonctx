@@ -120,7 +120,9 @@ impl LogState {
         let saved = self.content.cursor();
         self.content.perform(Action::Move(Motion::DocumentEnd));
         self.content
-            .perform(Action::Edit(text_editor::Edit::Paste(Arc::new(format!("{line}\n")))));
+            .perform(Action::Edit(text_editor::Edit::Paste(Arc::new(format!(
+                "{line}\n"
+            )))));
         self.content.move_to(saved);
 
         if self.lines > MAX_LOG_LINES + TRIM_SLACK {
@@ -139,7 +141,12 @@ impl LogState {
             .map_or(self.text.len(), |(index, _)| index + 1);
         self.text.drain(..cut);
         self.lines = MAX_LOG_LINES;
-        self.longest_line = self.text.lines().map(|line| line.chars().count()).max().unwrap_or(0);
+        self.longest_line = self
+            .text
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0);
         self.content = text_editor::Content::with_text(&self.text);
 
         if self.follow {

@@ -24,16 +24,25 @@ fn state() -> State {
             ("Broforce", 274190, "GE-Proton10-34"),
             ("Castle Crashers", 204360, "proton_hotfix"),
             ("Enter the Gungeon", 311690, ""),
-            ("Raptor: Call of The Shadows - 2015 Edition", 336060, "proton_experimental"),
+            (
+                "Raptor: Call of The Shadows - 2015 Edition",
+                336060,
+                "proton_experimental",
+            ),
             ("The Disney Afternoon Collection", 525040, ""),
             ("Worms Crazy Golf", 70620, ""),
         ]
         .iter()
-        .map(|(name, id, tool)| crate::games::GameRow::from_game(&game(name, *id, tool, "/lib", "")))
+        .map(|(name, id, tool)| {
+            crate::games::GameRow::from_game(&game(name, *id, tool, "/lib", ""))
+        })
         .collect(),
     );
     // Lay the table out at the window width the sensor would report.
-    let _ = state.update(Message::TableResized(iced::Size::new(SIZE.width - 8.0, 300.0)));
+    let _ = state.update(Message::TableResized(iced::Size::new(
+        SIZE.width - 8.0,
+        300.0,
+    )));
     let _ = state.update(Message::RowPressed(1));
     let _ = state.append_log("Refreshing games...");
     state
@@ -78,7 +87,9 @@ fn visual_states() {
     let mut sim = Simulator::with_size(Default::default(), SIZE, state.view(id));
     let row = Point::new(200.0, 33.0 + 28.0 * 2.5);
     move_to(&mut sim, row);
-    let _ = sim.simulate([Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))]);
+    let _ = sim.simulate([Event::Mouse(mouse::Event::ButtonPressed(
+        mouse::Button::Right,
+    ))]);
     move_to(&mut sim, Point::new(row.x + 30.0, row.y + 70.0));
     save(&mut sim, &theme, "main-context-menu");
 }

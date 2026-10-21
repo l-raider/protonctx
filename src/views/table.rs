@@ -110,7 +110,11 @@ pub fn row_colors(view: &TableView, row: usize) -> (Color, Color) {
     let filled = view.focused && view.selected == Some(row);
     let hovered = view.hovered == Some(row);
     if filled {
-        let fill = if hovered { t.selection_hover } else { t.primary };
+        let fill = if hovered {
+            t.selection_hover
+        } else {
+            t.primary
+        };
         return (fill, t.primary_foreground);
     }
     let base = if row % 2 == 1 {
@@ -135,7 +139,11 @@ impl<'a> table::Column<'a, Message, Theme, iced::Renderer> for GameColumn {
         row_index: usize,
         _row: &'a GameRow,
     ) -> Element<'a, Message> {
-        let text_value = self.texts.get(row_index).map(String::as_str).unwrap_or_default();
+        let text_value = self
+            .texts
+            .get(row_index)
+            .map(String::as_str)
+            .unwrap_or_default();
         body_cell(text_value, col_index, row_index, self.view)
     }
 
@@ -161,8 +169,9 @@ fn header_cell<'a>(index: usize, view: &TableView) -> Element<'a, Message> {
     };
     // Inactive columns keep an invisible slot of the same size so centred
     // titles do not shift when the sorted column changes.
-    let slot = container(icon(indicator, t.font_size * 0.75).opacity(if active { 1.0 } else { 0.0 }))
-        .padding(SORT_SLOT_PADDING);
+    let slot =
+        container(icon(indicator, t.font_size * 0.75).opacity(if active { 1.0 } else { 0.0 }))
+            .padding(SORT_SLOT_PADDING);
 
     let title = text(COLUMN_NAMES.get(index).copied().unwrap_or_default())
         .font(t.header_font)
@@ -194,7 +203,11 @@ fn header_cell<'a>(index: usize, view: &TableView) -> Element<'a, Message> {
             // does not poke out of the rounded border.
             border: Border {
                 radius: iced::border::Radius {
-                    top_left: if is_first { (t.radius - 1.0).max(0.0) } else { 0.0 },
+                    top_left: if is_first {
+                        (t.radius - 1.0).max(0.0)
+                    } else {
+                        0.0
+                    },
                     ..Default::default()
                 },
                 ..Border::default()
@@ -216,7 +229,9 @@ fn header_cell<'a>(index: usize, view: &TableView) -> Element<'a, Message> {
     } else {
         column![label_area, rule].into()
     };
-    mouse_area(cell).on_press(Message::HeaderPressed(index)).into()
+    mouse_area(cell)
+        .on_press(Message::HeaderPressed(index))
+        .into()
 }
 
 /// A container style that is only a solid fill.
@@ -229,23 +244,32 @@ fn solid(color: Color) -> container::Style {
 
 /// One body cell: the elided text on the row's fill, the hover tracker, and
 /// the row context menu.
-fn body_cell<'a>(text_value: &'a str, column: usize, row: usize, view: TableView) -> Element<'a, Message> {
+fn body_cell<'a>(
+    text_value: &'a str,
+    column: usize,
+    row: usize,
+    view: TableView,
+) -> Element<'a, Message> {
     let t = tokens();
     let (fill, foreground) = row_colors(&view, row);
-    let content = container(label(text_value).color(foreground).wrapping(text::Wrapping::None))
-        .width(Length::Fill)
-        .height(ROW_HEIGHT - 1.0)
-        // gpui centres row text 2 px lower than a plain centre in the
-        // 27 px above the separator.
-        .padding(iced::Padding {
-            top: 4.0,
-            right: CELL_PADDING_X,
-            bottom: 0.0,
-            left: CELL_PADDING_X,
-        })
-        .align_y(Alignment::Center)
-        .clip(true)
-        .style(move |_theme: &Theme| solid(fill));
+    let content = container(
+        label(text_value)
+            .color(foreground)
+            .wrapping(text::Wrapping::None),
+    )
+    .width(Length::Fill)
+    .height(ROW_HEIGHT - 1.0)
+    // gpui centres row text 2 px lower than a plain centre in the
+    // 27 px above the separator.
+    .padding(iced::Padding {
+        top: 4.0,
+        right: CELL_PADDING_X,
+        bottom: 0.0,
+        left: CELL_PADDING_X,
+    })
+    .align_y(Alignment::Center)
+    .clip(true)
+    .style(move |_theme: &Theme| solid(fill));
     // Breeze separates rows with the alternating row shade, under every row
     // (the selected one included).
     let separator = container(space())
@@ -258,8 +282,10 @@ fn body_cell<'a>(text_value: &'a str, column: usize, row: usize, view: TableView
         .on_enter(Message::CellEntered(row, column))
         .on_exit(Message::CellExited(row, column));
 
-    ContextMenu::new(tracked, move || crate::menu::row_context_menu(view.cache_exists))
-        .into()
+    ContextMenu::new(tracked, move || {
+        crate::menu::row_context_menu(view.cache_exists)
+    })
+    .into()
 }
 
 /// The bordered table: header, rows, and the sensor that reports the inner

@@ -15,7 +15,8 @@ use native_theme::theme::{IconData, IconSet};
 
 /// The packaged application icon, embedded from the packaging tree so the
 /// About dialog, the window icon, and the installers share one source.
-pub const APP_ICON_PNG: &[u8] = include_bytes!("../packaging/icons/hicolor/256x256/apps/protonctx.png");
+pub const APP_ICON_PNG: &[u8] =
+    include_bytes!("../packaging/icons/hicolor/256x256/apps/protonctx.png");
 
 /// Every icon the UI draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -70,9 +71,7 @@ impl Icon {
             Icon::Eraser => embedded(include_bytes!("../assets/icons/eraser.svg")),
             Icon::LogOut => embedded(include_bytes!("../assets/icons/log-out.svg")),
             Icon::SortAscending => embedded(include_bytes!("../assets/icons/sort-ascending.svg")),
-            Icon::SortDescending => {
-                embedded(include_bytes!("../assets/icons/sort-descending.svg"))
-            }
+            Icon::SortDescending => embedded(include_bytes!("../assets/icons/sort-descending.svg")),
         }
     }
 }

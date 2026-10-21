@@ -151,7 +151,11 @@ fn status_bar(state: &State) -> Element<'_, Message> {
     // The Qt status bar showed an indeterminate progress bar while a launch
     // was in flight.
     if state.launch_running {
-        left = left.push(state.spinner.view(state.spinner_elapsed, state.reduce_motion));
+        left = left.push(
+            state
+                .spinner
+                .view(state.spinner_elapsed, state.reduce_motion),
+        );
     }
     left = left.push(label(state.status_text.as_str()));
 
@@ -163,11 +167,108 @@ fn status_bar(state: &State) -> Element<'_, Message> {
     .width(Length::Fill)
     .align_y(Alignment::Center);
 
-    let rule = container(Space::new().width(Length::Fill).height(1)).style(move |_theme: &Theme| {
-        container::Style {
-            background: Some(Background::Color(t.border)),
-            ..container::Style::default()
-        }
-    });
+    let rule =
+        container(Space::new().width(Length::Fill).height(1)).style(move |_theme: &Theme| {
+            container::Style {
+                background: Some(Background::Color(t.border)),
+                ..container::Style::default()
+            }
+        });
     column![rule, bar].into()
+}
+
+#[cfg(test)]
+mod tests {
+    use iced_test::Simulator;
+
+    use crate::app::{Message, State};
+    use crate::test_support::{state_with, test_game};
+
+    fn fixture() -> State {
+        state_with(&[
+            test_game("Broforce", 274190),
+            test_game("Castle Crashers", 204360),
+        ])
+    }
+
+    /// Click the text `target` in the main view and return what it published,
+    /// without the layout reports the sensors send on their own.
+    fn click(state: &State, target: &str) -> Vec<Message> {
+        let mut sim = Simulator::with_size(
+            Default::default(),
+            crate::app::MAIN_SIZE,
+            super::view(state),
+        );
+        sim.click(target)
+            .unwrap_or_else(|error| panic!("{target}: {error}"));
+        sim.into_messages()
+            .filter(|message| {
+                !matches!(
+                    message,
+                    Message::TableResized(_)
+                        | Message::SplitResized(_)
+                        | Message::LogResized(_)
+                        | Message::LogScrolled(_)
+                        | Message::CellEntered(..)
+                        | Message::CellExited(..)
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn refresh_button_emits_refresh() {
+        let messages = click(&fixture(), "Refresh games");
+        assert!(
+            matches!(messages.as_slice(), [Message::Refresh]),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn header_click_sorts() {
+        let mut state = fixture();
+        let messages = click(&state, "App ID");
+        assert!(
+            matches!(messages.as_slice(), [Message::HeaderPressed(1)]),
+            "{messages:?}"
+        );
+        for message in messages {
+            let _ = state.update(message);
+        }
+        assert_eq!(
+            state.rows.iter().map(|row| row.app_id).collect::<Vec<_>>(),
+            vec![204360, 274190]
+        );
+    }
+
+    #[test]
+    fn row_click_selects() {
+        let mut state = fixture();
+        let messages = click(&state, "Castle Crashers");
+        assert!(
+            matches!(messages.as_slice(), [Message::RowPressed(1)]),
+            "{messages:?}"
+        );
+        for message in messages {
+            let _ = state.update(message);
+        }
+        assert_eq!(state.selected_row().map(|row| row.app_id), Some(204360));
+    }
+
+    #[test]
+    fn action_buttons_are_disabled_without_a_selection() {
+        let state = fixture();
+        for label in ["Browse...", "Explorer", "Wine Configuration"] {
+            assert!(click(&state, label).is_empty(), "{label} is enabled");
+        }
+
+        let mut state = fixture();
+        let _ = state.update(Message::RowPressed(0));
+        let messages = click(&state, "Wine Configuration");
+        assert!(
+            matches!(messages.as_slice(), [Message::LaunchTool("winecfg")]),
+            "{messages:?}"
+        );
+    }
 }

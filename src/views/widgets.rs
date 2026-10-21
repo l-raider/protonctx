@@ -213,7 +213,11 @@ pub fn outline_style(status: button::Status, default_focus: bool) -> button::Sty
     let base = button::Style {
         background: Some(Background::Color(t.input_background)),
         text_color: t.button_foreground,
-        border: border(if default_focus { t.ring } else { t.input_border }),
+        border: border(if default_focus {
+            t.ring
+        } else {
+            t.input_border
+        }),
         shadow: Default::default(),
         snap: true,
     };
@@ -406,5 +410,10 @@ pub fn elide(content: &str, max_width: f32, font: iced::Font, size: f32) -> Stri
     if low == 0 {
         return ELLIPSIS.to_string();
     }
-    chars[..low].iter().collect::<String>().trim_end().to_string() + ELLIPSIS
+    chars[..low]
+        .iter()
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+        + ELLIPSIS
 }

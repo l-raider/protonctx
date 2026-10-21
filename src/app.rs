@@ -92,7 +92,10 @@ pub fn discovery_outcome(
 /// A runtime event the app listens to, tagged with its window.
 #[derive(Clone, Debug)]
 pub enum WindowInput {
-    Opened { position: Option<Point>, size: Size },
+    Opened {
+        position: Option<Point>,
+        size: Size,
+    },
     Moved(Point),
     Resized(Size),
     Focused,
@@ -329,7 +332,8 @@ impl State {
                 .map(Message::LaunchEvents),
         ];
         if self.launch_running {
-            subscriptions.push(Subscription::run(background::spinner_ticks).map(Message::SpinnerTick));
+            subscriptions
+                .push(Subscription::run(background::spinner_ticks).map(Message::SpinnerTick));
         }
         Subscription::batch(subscriptions)
     }
@@ -392,9 +396,7 @@ impl State {
                 self.fit_compat_column();
                 Task::none()
             }
-            Message::TableSynced(offset) => {
-                operation::scroll_to(self.table_header.clone(), offset)
-            }
+            Message::TableSynced(offset) => operation::scroll_to(self.table_header.clone(), offset),
             Message::TableResized(size) => {
                 self.table_width = Some(size.width);
                 self.fit_compat_column();
@@ -434,8 +436,10 @@ impl State {
                 let Some(row) = self.selected_row() else {
                     return Task::none();
                 };
-                let path =
-                    crate::steam::paths::app_compatdata_dir(Path::new(&row.library_path), row.app_id);
+                let path = crate::steam::paths::app_compatdata_dir(
+                    Path::new(&row.library_path),
+                    row.app_id,
+                );
                 copy_to_clipboard(path.to_string_lossy().into_owned())
             }
             Message::CopyToolPath => match self.selected_row() {
@@ -548,7 +552,9 @@ impl State {
             self.dialogs.insert(window, kind);
             return window::gain_focus(window);
         }
-        let parent = self.main_position.map(|position| (position, self.main_size));
+        let parent = self
+            .main_position
+            .map(|position| (position, self.main_size));
         let (window, open) = window::open(dialog_ui::window_settings(&kind, parent));
         self.dialogs.insert(window, kind);
         // The window's own settings do the rest; nothing to do once open.
@@ -719,7 +725,10 @@ impl State {
         } else {
             None
         };
-        Task::perform(background::pick_executable(initial_dir), Message::BrowseFinished)
+        Task::perform(
+            background::pick_executable(initial_dir),
+            Message::BrowseFinished,
+        )
     }
 
     fn browse_finished(&mut self, outcome: BrowseOutcome) -> Task<Message> {
@@ -941,7 +950,7 @@ impl State {
     /// Mirror the view-relevant state into the table columns and rebuild the
     /// elided texts when the rows or widths changed. Runs after every update,
     /// the only path that mutates either.
-    fn sync_table(&mut self) {
+    pub(crate) fn sync_table(&mut self) {
         let view = TableView {
             sort_column: self.sort_column,
             sort: self.sort,
@@ -1039,6 +1048,9 @@ fn window_input(
 }
 
 #[cfg(test)]
+mod update_tests;
+
+#[cfg(test)]
 mod tests {
     use iced::futures::StreamExt as _;
     use iced::window;
@@ -1090,7 +1102,11 @@ mod tests {
         let _ = state.update(Message::LaunchTool("winecfg"));
         assert!(state.launch_running);
         assert_eq!(state.status_text, "Running winecfg...");
-        assert!(state.log.text().contains("Starting "), "{}", state.log.text());
+        assert!(
+            state.log.text().contains("Starting "),
+            "{}",
+            state.log.text()
+        );
 
         drain_launches(&mut state);
         let log = state.log.text();
@@ -1114,10 +1130,12 @@ mod tests {
         assert_eq!(state.launch_generation, 2);
 
         // The older launch finishing does not clobber the newer status.
-        let _ = state.update(Message::LaunchEvents(vec![background::LaunchEvent::Exited {
-            generation: 1,
-            result: Err("gone".to_string()),
-        }]));
+        let _ = state.update(Message::LaunchEvents(vec![
+            background::LaunchEvent::Exited {
+                generation: 1,
+                result: Err("gone".to_string()),
+            },
+        ]));
         assert_eq!(state.status_text, "Running regedit...");
         assert!(state.launch_running);
         drain_launches(&mut state);

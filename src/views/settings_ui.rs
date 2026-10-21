@@ -41,7 +41,13 @@ fn checkbox_style(status: checkbox::Status) -> checkbox::Style {
     } else {
         (t.input_background, t.input_border)
     };
-    let fade = |color| if disabled { faded(color, t.disabled_opacity) } else { color };
+    let fade = |color| {
+        if disabled {
+            faded(color, t.disabled_opacity)
+        } else {
+            color
+        }
+    };
     checkbox::Style {
         background: Background::Color(fade(fill)),
         icon_color: fade(t.primary_foreground),

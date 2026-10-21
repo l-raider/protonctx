@@ -121,7 +121,6 @@ impl AppTokens {
     pub fn rem(&self, units: f32) -> f32 {
         (units * self.font_size / 4.0).round()
     }
-
 }
 
 static TOKENS: OnceLock<AppTokens> = OnceLock::new();
@@ -181,7 +180,11 @@ pub fn qt_lighter(color: Color, factor: f32) -> Color {
     } else {
         60.0 * ((r - g) / delta + 4.0)
     };
-    let mut saturation = if max <= f32::EPSILON { 0.0 } else { delta / max };
+    let mut saturation = if max <= f32::EPSILON {
+        0.0
+    } else {
+        delta / max
+    };
     let mut value = max * factor / 100.0;
     if value > 1.0 {
         saturation = (saturation - (value - 1.0)).max(0.0);

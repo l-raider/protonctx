@@ -24,7 +24,11 @@ const CONTEXT_MENU_WIDTH: f32 = 200.0;
 
 /// One menu item: an optional leading icon and the label at the theme's base
 /// font size (not a smaller menu size). `None` disables it.
-fn item<'a>(text: &'a str, leading: Option<Icon>, on_press: Option<Message>) -> Element<'a, Message> {
+fn item<'a>(
+    text: &'a str,
+    leading: Option<Icon>,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
     let t = tokens();
     let content: Element<'a, Message> = match leading {
         Some(leading) => row![icon(leading, t.font_size - 2.0), label(text)]
@@ -34,15 +38,17 @@ fn item<'a>(text: &'a str, leading: Option<Icon>, on_press: Option<Message>) -> 
         None => label(text).into(),
     };
     let enabled = on_press.is_some();
-    button(container(content).height(Length::Fill).align_y(Alignment::Center))
-        .width(Length::Fill)
-        .height(ITEM_HEIGHT)
-        .padding([0, 8])
-        .on_press_maybe(on_press)
-        .style(move |_theme: &Theme, status| {
-            item_style(widgets::effective_status(status, enabled))
-        })
-        .into()
+    button(
+        container(content)
+            .height(Length::Fill)
+            .align_y(Alignment::Center),
+    )
+    .width(Length::Fill)
+    .height(ITEM_HEIGHT)
+    .padding([0, 8])
+    .on_press_maybe(on_press)
+    .style(move |_theme: &Theme, status| item_style(widgets::effective_status(status, enabled)))
+    .into()
 }
 
 /// Menu items are flat; hovering tints them with the selection at 0.3.
@@ -105,9 +111,21 @@ fn panel_border() -> Border {
 pub fn main_menu<'a>() -> Element<'a, Message> {
     let t = tokens();
     let items = vec![
-        Item::new(item("Settings", Some(Icon::Settings), Some(Message::OpenSettings))),
-        Item::new(item("Clear logs", Some(Icon::Eraser), Some(Message::ClearLogs))),
-        Item::new(item("About protonctx", Some(Icon::Info), Some(Message::OpenAbout))),
+        Item::new(item(
+            "Settings",
+            Some(Icon::Settings),
+            Some(Message::OpenSettings),
+        )),
+        Item::new(item(
+            "Clear logs",
+            Some(Icon::Eraser),
+            Some(Message::ClearLogs),
+        )),
+        Item::new(item(
+            "About protonctx",
+            Some(Icon::Info),
+            Some(Message::OpenAbout),
+        )),
         Item::new(separator()),
         Item::new(item("Exit", Some(Icon::LogOut), Some(Message::Exit))),
     ];
@@ -116,7 +134,11 @@ pub fn main_menu<'a>() -> Element<'a, Message> {
         .padding(MENU_PADDING)
         .offset(MENU_OFFSET);
 
-    let root = widgets::toolbar_button(icon(Icon::Menu, t.font_size), 0.0, Some(Message::MenuOpened));
+    let root = widgets::toolbar_button(
+        icon(Icon::Menu, t.font_size),
+        0.0,
+        Some(Message::MenuOpened),
+    );
 
     MenuBar::new(vec![Item::with_menu(root, menu)])
         .draw_path(DrawPath::FakeHovering)
@@ -132,7 +154,10 @@ pub fn main_menu<'a>() -> Element<'a, Message> {
 
 /// `native-theme`'s menu style with the Breeze overrides: the panel on the
 /// window fill, the bar itself invisible inside the toolbar.
-fn menu_bar_style(theme: &Theme, status: iced_aw::style::Status) -> iced_aw::style::menu_bar::Style {
+fn menu_bar_style(
+    theme: &Theme,
+    status: iced_aw::style::Status,
+) -> iced_aw::style::menu_bar::Style {
     let t = tokens();
     let native = native_theme_iced::styles::aw::menu(&t.resolved)(theme, status);
     iced_aw::style::menu_bar::Style {
@@ -159,8 +184,16 @@ pub fn row_context_menu<'a>(cache_exists: bool) -> Element<'a, Message> {
         entries.push(item(name, None, Some(Message::LaunchTool(tool))));
     }
     entries.push(separator());
-    entries.push(item("Copy compatdata path", None, Some(Message::CopyCompatDataPath)));
-    entries.push(item("Copy compatibility tool path", None, Some(Message::CopyToolPath)));
+    entries.push(item(
+        "Copy compatdata path",
+        None,
+        Some(Message::CopyCompatDataPath),
+    ));
+    entries.push(item(
+        "Copy compatibility tool path",
+        None,
+        Some(Message::CopyToolPath),
+    ));
     entries.push(separator());
     entries.push(item(
         "Delete Shader Cache",

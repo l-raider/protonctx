@@ -155,9 +155,7 @@ pub fn view<'a>(id: window::Id, kind: &'a DialogKind, state: &'a State) -> Eleme
         DialogKind::About => about_ui::body(),
         DialogKind::Settings => settings_ui::body(state.remember_last_dir),
         DialogKind::LaunchError(message) => error_body(message),
-        DialogKind::DeleteShaderCache { path, .. } => {
-            warning_body(delete_cache_message(path))
-        }
+        DialogKind::DeleteShaderCache { path, .. } => warning_body(delete_cache_message(path)),
     };
 
     let locked = !kind.dismissible();
@@ -243,7 +241,9 @@ mod tests {
             Size::new(500.0, 130.0)
         );
         let delete = DialogKind::DeleteShaderCache {
-            game: crate::games::GameRow::from_game(&crate::test_support::game("A", 1, "", "/l", "")),
+            game: crate::games::GameRow::from_game(&crate::test_support::game(
+                "A", 1, "", "/l", "",
+            )),
             path: "/l/steamapps/shadercache/1".into(),
             deleting: false,
         };
@@ -252,7 +252,9 @@ mod tests {
         assert_eq!(DialogKind::About.default_button(), DialogButton::Ok);
         assert!(delete.dismissible());
         assert_eq!(delete.title(), "Delete Shader Cache");
-        assert!(DialogKind::LaunchError("a".into()).same_window(&DialogKind::LaunchError("b".into())));
+        assert!(
+            DialogKind::LaunchError("a".into()).same_window(&DialogKind::LaunchError("b".into()))
+        );
         assert!(!DialogKind::About.same_window(&DialogKind::Settings));
     }
 
