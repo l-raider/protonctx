@@ -182,6 +182,43 @@ fn visual_states() {
     save(&adapter, 760, 520, "slint-main-scrollbars");
     pointer(window, 740.0, 80.0);
     save(&adapter, 760, 520, "slint-main-scrollbar-hover");
+
+    // A mouse drag in the log selects text (it used to pan the view), and
+    // a right click opens the text menu with Copy enabled.
+    let press = LogicalPosition::new(60.0, 392.0);
+    let release = LogicalPosition::new(420.0, 408.0);
+    pointer(window, press.x, press.y);
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: press,
+        button: PointerEventButton::Left,
+    });
+    pointer(window, 240.0, 400.0);
+    pointer(window, release.x, release.y);
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: release,
+        button: PointerEventButton::Left,
+    });
+    save(&adapter, 760, 520, "slint-log-selection");
+    click(window, 430.0, 380.0, PointerEventButton::Right);
+    pointer(window, 470.0, 380.0 + 4.0 + 14.0);
+    save(&adapter, 760, 520, "slint-log-menu");
+    click(window, 700.0, 300.0, PointerEventButton::Left);
+
+    // Dragging a selection above the log scrolls it up (to the first line).
+    let press = LogicalPosition::new(300.0, 420.0);
+    pointer(window, press.x, press.y);
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: press,
+        button: PointerEventButton::Left,
+    });
+    for y in [400.0, 370.0, 330.0, 290.0, 250.0, 200.0] {
+        pointer(window, 300.0, y);
+    }
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: LogicalPosition::new(300.0, 200.0),
+        button: PointerEventButton::Left,
+    });
+    save(&adapter, 760, 520, "slint-log-drag-autoscroll");
     drop(main);
 
     let dialog = AboutDialog::new().unwrap();
@@ -319,6 +356,19 @@ fn main_window_routes_input_to_its_callbacks() {
         window,
         40.0,
         35.0 + 4.0 + 28.0 + 14.0,
+        PointerEventButton::Left,
+    );
+    assert_eq!(calls.take(), ["clear"]);
+
+    // A right click in the log opens its text menu; Clear logs is the last
+    // entry (menu at 300,400: Copy, Select All, separator, Clear logs).
+    main.set_log_text("[02:57:17.809] Refreshing games...\n[02:57:17.900] 6 games loaded\n".into());
+    main.set_log_lines(2);
+    click(window, 300.0, 400.0, PointerEventButton::Right);
+    click(
+        window,
+        330.0,
+        400.0 + 4.0 + 28.0 + 28.0 + 9.0 + 14.0,
         PointerEventButton::Left,
     );
     assert_eq!(calls.take(), ["clear"]);

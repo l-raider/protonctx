@@ -151,6 +151,8 @@ export component MenuRow {
     in property <image> icon;
     in property <bool> has-icon: false;
     in property <bool> enabled: true;
+    // A key chord shown at the right edge, as Qt menus do.
+    in property <string> shortcut;
     callback activated;
 
     height: 28px;
@@ -185,11 +187,18 @@ export component MenuRow {
         }
         label := Text {
             accessible-role: none;
+            horizontal-stretch: 1;
             text: root.text;
             vertical-alignment: center;
             color: root.enabled
                 ? Theme.menu-foreground
                 : Theme.menu-foreground.transparentize(Theme.disabled-opacity);
+        }
+        if root.shortcut != "": Text {
+            accessible-role: none;
+            text: root.shortcut;
+            vertical-alignment: center;
+            color: label.color;
         }
     }
 
@@ -294,6 +303,9 @@ export component ScrollArea {
     flick := Flickable {
         x: 0;
         y: 0;
+        // A mouse drag selects (log text) instead of panning, as in Qt views;
+        // the wheel and touch still scroll.
+        mouse-drag-pan-enabled: false;
         width: parent.width - (root.overflow-y ? root.lane : 0px);
         height: parent.height - (root.overflow-x ? root.lane : 0px);
         content-width: max(root.content-width, self.width);

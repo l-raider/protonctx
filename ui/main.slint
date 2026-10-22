@@ -102,7 +102,11 @@ export component MainWindow inherits Window {
                 return accept;
             }
             if event.text == Key.Menu || (event.modifiers.shift && event.text == Key.F10) {
-                table.open-context-for-selected();
+                if log-input.has-focus {
+                    root.open-log-menu(log-frame.absolute-position.x + 20px, log-frame.absolute-position.y + 20px);
+                } else {
+                    table.open-context-for-selected();
+                }
                 return accept;
             }
             if event.modifiers.control && (event.text == "c" || event.text == "C") {
@@ -256,6 +260,17 @@ export component MainWindow inherits Window {
                             root.log-following = self.offset-y <= min(0px, self.visible-height - self.content-height) + 1px;
                         }
 
+                        // Under the text, which leaves right presses to it.
+                        TouchArea {
+                            pointer-event(event) => {
+                                if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
+                                    root.open-log-menu(
+                                        self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
+                                }
+                            }
+                        }
+
                         log-input := TextInput {
                             x: 14px;
                             y: 12px;
@@ -273,6 +288,30 @@ export component MainWindow inherits Window {
                             color: Theme.foreground;
                             selection-background-color: Theme.selection;
                             selection-foreground-color: Theme.primary-foreground;
+
+                            // Keep the cursor in view while selecting with the
+                            // mouse or keys (Slint's TextEdit does the same).
+                            // Only while focused, so appended lines do not
+                            // move the view.
+                            cursor-position-changed(cursor) => {
+                                if !self.has-focus {
+                                    return;
+                                }
+                                let x = self.x + cursor.x;
+                                let y = self.y + cursor.y;
+                                let line = root.log-line-height;
+                                if x + log-scroll.offset-x < 0 {
+                                    log-scroll.offset-x = -x;
+                                } else if x + log-scroll.offset-x > log-scroll.visible-width {
+                                    log-scroll.offset-x = log-scroll.visible-width - x;
+                                }
+                                if y + log-scroll.offset-y < 0 {
+                                    log-scroll.offset-y = -y;
+                                } else if y + line + log-scroll.offset-y > log-scroll.visible-height {
+                                    log-scroll.offset-y = log-scroll.visible-height - y - line;
+                                }
+                                log-scroll.clamp-offsets();
+                            }
                         }
                     }
                 }
@@ -369,6 +408,51 @@ export component MainWindow inherits Window {
                     activated => {
                         main-menu.close();
                         root.exit-app();
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- The log's text menu ----
+    property <length> log-menu-x;
+    property <length> log-menu-y;
+    function open-log-menu(x: length, y: length) {
+        root.log-menu-x = x;
+        root.log-menu-y = y;
+        log-menu.show();
+    }
+    log-menu := PopupWindow {
+        x: min(root.log-menu-x, root.width - 182px);
+        y: min(root.log-menu-y, root.height - 110px);
+        width: 180px;
+        MenuPanel {
+            VerticalLayout {
+                padding: 4px;
+                MenuRow {
+                    text: "Copy";
+                    shortcut: "Ctrl+C";
+                    enabled: log-input.anchor-position-byte-offset != log-input.cursor-position-byte-offset;
+                    activated => {
+                        log-menu.close();
+                        root.log-copy();
+                    }
+                }
+                MenuRow {
+                    text: "Select All";
+                    shortcut: "Ctrl+A";
+                    activated => {
+                        log-menu.close();
+                        root.log-select-all();
+                    }
+                }
+                MenuSeparator { }
+                MenuRow {
+                    text: "Clear logs";
+                    shortcut: "Ctrl+L";
+                    activated => {
+                        log-menu.close();
+                        root.clear-logs();
                     }
                 }
             }
