@@ -1,0 +1,447 @@
+// The main window: toolbar, games table, action row, log pane, status bar.
+
+import { Theme } from "theme.slint";
+import { Icon, OutlineButton, ToolbarButton, MenuRow, MenuSeparator, MenuPanel, ScrollArea } from "widgets.slint";
+import { GamesTable, GameRowData } from "table.slint";
+
+export { GameRowData }
+
+export component MainWindow inherits Window {
+    in property <string> app-title: "protonctx";
+    title: root.app-title;
+    icon: @image-url("../packaging/icons/hicolor/256x256/apps/protonctx.png");
+    preferred-width: 760px;
+    preferred-height: 520px;
+    min-width: 468px;
+    min-height: 288px;
+    background: Theme.background;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size;
+    default-font-weight: Theme.font-weight;
+
+    // ---- State pushed from Rust ----
+    in property <[GameRowData]> rows;
+    in property <int> selected: -1;
+    in property <bool> focused: true;
+    in property <int> sort-column: 0;
+    in property <bool> sort-descending: false;
+    in property <string> status-text: "Ready";
+    in property <bool> loading: false;
+    in property <bool> launch-running: false;
+    in property <string> log-text;
+    in property <int> log-lines: 0;
+    in property <bool> cache-exists: false;
+    // While a dialog is open the main window ignores input.
+    in property <bool> dialog-open: false;
+
+    // ---- User actions ----
+    callback refresh();
+    callback open-settings();
+    callback clear-logs();
+    callback open-about();
+    callback exit-app();
+    callback header-clicked(int);
+    callback row-pressed(int);
+    callback launch-tool(string);
+    callback browse();
+    callback copy-compatdata();
+    callback copy-tool-path();
+    callback delete-shader-cache();
+
+    // ---- Log pane control from Rust ----
+    property <bool> log-following: true;
+
+    // Keep the view at the newest line unless the user scrolled up.
+    public function log-appended() {
+        if root.log-following {
+            log-scroll.scroll-to-bottom();
+        }
+    }
+
+    // Following also survives resizes (and the first layout).
+    property <length> log-visible-height: log-scroll.visible-height;
+    changed log-visible-height => {
+        if root.log-following {
+            log-scroll.scroll-to-bottom();
+        }
+    }
+
+    // `removed` lines were trimmed from the top: keep the same lines in view.
+    public function log-trimmed(removed: int) {
+        if root.log-following {
+            root.log-appended();
+        } else {
+            log-scroll.offset-y = min(0px, log-scroll.offset-y + removed * root.log-line-height);
+        }
+    }
+
+    public function log-select-all() {
+        log-input.select-all();
+        log-input.focus();
+    }
+
+    public function log-copy() {
+        log-input.copy();
+    }
+
+    property <length> log-line-height: log-input.preferred-height / max(1, root.log-lines + 1);
+    property <bool> has-selection: root.selected >= 0;
+
+    // Split: the table pane takes 420 of 420 + 140 px initially; both panes
+    // keep their minimum heights (160 / 54 px).
+    property <float> split-ratio: 420 / 560;
+
+    keys := FocusScope {
+        capture-key-pressed(event) => {
+            if root.dialog-open {
+                return accept;
+            }
+            if event.text == Key.F5 {
+                root.refresh();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "c" || event.text == "C") {
+                root.log-copy();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "a" || event.text == "A") {
+                root.log-select-all();
+                return accept;
+            }
+            if event.modifiers.control && (event.text == "l" || event.text == "L") {
+                root.clear-logs();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            // ---- Toolbar, on the KDE Header colour ----
+            toolbar := Rectangle {
+                background: Theme.header;
+                height: Theme.rem(8) + 2 * Theme.rem(1);
+                HorizontalLayout {
+                    padding-top: Theme.rem(1);
+                    padding-bottom: Theme.rem(1);
+                    padding-left: Theme.rem(2);
+                    padding-right: Theme.rem(2);
+                    spacing: Theme.rem(1);
+                    alignment: start;
+                    hamburger := ToolbarButton {
+                        icon: @image-url("../assets/icons/menu.svg");
+                        active: main-menu.is-open;
+                        clicked => {
+                            main-menu.show();
+                        }
+                    }
+                    ToolbarButton {
+                        icon: @image-url("../assets/icons/refresh-cw.svg");
+                        text: "Refresh games";
+                        padding-x: Theme.rem(3);
+                        enabled: !root.loading;
+                        clicked => {
+                            root.refresh();
+                        }
+                    }
+                }
+            }
+
+            // ---- Content: the table pane over the log pane ----
+            content := Rectangle {
+                vertical-stretch: 1;
+
+                property <length> inner-height: self.height - Theme.rem(1);
+                property <length> table-height: clamp(
+                    root.split-ratio * self.inner-height,
+                    min(160px, self.inner-height),
+                    max(min(160px, self.inner-height), self.inner-height - 54px));
+
+                table-pane := VerticalLayout {
+                    x: Theme.rem(1);
+                    y: 0;
+                    width: parent.width - 2 * Theme.rem(1);
+                    height: content.table-height;
+                    spacing: Theme.rem(1);
+                    padding-bottom: Theme.rem(1);
+
+                    GamesTable {
+                        vertical-stretch: 1;
+                        rows: root.rows;
+                        selected: root.selected;
+                        focused: root.focused;
+                        sort-column: root.sort-column;
+                        sort-descending: root.sort-descending;
+                        header-clicked(column) => {
+                            root.header-clicked(column);
+                        }
+                        row-pressed(row) => {
+                            root.row-pressed(row);
+                        }
+                        row-context(row, x, y) => {
+                            root.context-x = x;
+                            root.context-y = y;
+                            context-menu.show();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: Theme.rem(1);
+                        alignment: start;
+                        OutlineButton {
+                            text: "Browse...";
+                            enabled: root.has-selection;
+                            clicked => {
+                                root.browse();
+                            }
+                        }
+                        OutlineButton {
+                            text: "Explorer";
+                            enabled: root.has-selection;
+                            clicked => {
+                                root.launch-tool("explorer");
+                            }
+                        }
+                        OutlineButton {
+                            text: "Registry Editor";
+                            enabled: root.has-selection;
+                            clicked => {
+                                root.launch-tool("regedit");
+                            }
+                        }
+                        OutlineButton {
+                            text: "Task Manager";
+                            enabled: root.has-selection;
+                            clicked => {
+                                root.launch-tool("taskmgr");
+                            }
+                        }
+                        OutlineButton {
+                            text: "Wine Configuration";
+                            enabled: root.has-selection;
+                            clicked => {
+                                root.launch-tool("winecfg");
+                            }
+                        }
+                    }
+                }
+
+                // ---- Log pane ----
+                log-frame := Rectangle {
+                    x: Theme.rem(1);
+                    y: content.table-height;
+                    width: parent.width - 2 * Theme.rem(1);
+                    height: content.inner-height - content.table-height;
+                    background: Theme.muted;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    border-radius: Theme.radius;
+                    clip: true;
+
+                    log-scroll := ScrollArea {
+                        x: 5px;
+                        y: 5px;
+                        width: parent.width - 10px;
+                        height: parent.height - 10px;
+                        content-width: log-input.preferred-width + 20px;
+                        content-height: log-input.preferred-height + 16px;
+                        scrolled => {
+                            root.log-following = self.offset-y <= min(0px, self.visible-height - self.content-height) + 1px;
+                        }
+
+                        log-input := TextInput {
+                            x: 10px;
+                            y: 8px;
+                            width: max(self.preferred-width, log-scroll.visible-width - 20px);
+                            height: max(self.preferred-height, log-scroll.visible-height - 16px);
+                            text: root.log-text;
+                            read-only: true;
+                            single-line: false;
+                            wrap: no-wrap;
+                            font-family: Theme.mono-family;
+                            font-size: Theme.mono-size;
+                            color: Theme.foreground;
+                            selection-background-color: Theme.selection;
+                            selection-foreground-color: Theme.primary-foreground;
+                        }
+                    }
+                }
+
+                // The split handle: invisible, a few pixels around the seam.
+                TouchArea {
+                    x: 0;
+                    y: content.table-height - 4px;
+                    width: parent.width;
+                    height: 8px;
+                    mouse-cursor: row-resize;
+                    moved => {
+                        if self.pressed && content.inner-height > 0 {
+                            root.split-ratio = (self.y + self.mouse-y) / content.inner-height;
+                        }
+                    }
+                }
+            }
+
+            // ---- Status bar ----
+            Rectangle {
+                height: 1px;
+                background: Theme.border;
+            }
+            HorizontalLayout {
+                height: 28px;
+                padding-left: Theme.rem(2);
+                padding-right: Theme.rem(2);
+                spacing: Theme.rem(2);
+                if root.launch-running: Icon {
+                    size: Theme.font-size + 2px;
+                    y: (parent.height - self.height) / 2;
+                    source: @image-url("../assets/icons/loader-circle.svg");
+                    colorize: Theme.primary;
+                    transform-rotation: Theme.reduce-motion ? 0deg : animation-tick() * 360deg / 1s;
+                }
+                Text {
+                    text: root.status-text;
+                    color: Theme.foreground;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.has-selection && root.selected < root.rows.length
+                        ? "Selected: " + root.rows[root.selected].app-id : "";
+                    color: Theme.foreground;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // ---- The hamburger menu ----
+    main-menu := PopupWindow {
+        x: toolbar.x + Theme.rem(2);
+        y: toolbar.height + 2px;
+        width: 140px;
+        MenuPanel {
+            VerticalLayout {
+                padding: 4px;
+                MenuRow {
+                    text: "Settings";
+                    has-icon: true;
+                    icon: @image-url("../assets/icons/settings.svg");
+                    activated => {
+                        main-menu.close();
+                        root.open-settings();
+                    }
+                }
+                MenuRow {
+                    text: "Clear logs";
+                    has-icon: true;
+                    icon: @image-url("../assets/icons/eraser.svg");
+                    activated => {
+                        main-menu.close();
+                        root.clear-logs();
+                    }
+                }
+                MenuRow {
+                    text: "About protonctx";
+                    has-icon: true;
+                    icon: @image-url("../assets/icons/info.svg");
+                    activated => {
+                        main-menu.close();
+                        root.open-about();
+                    }
+                }
+                MenuSeparator { }
+                MenuRow {
+                    text: "Exit";
+                    has-icon: true;
+                    icon: @image-url("../assets/icons/log-out.svg");
+                    activated => {
+                        main-menu.close();
+                        root.exit-app();
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- The row context menu ----
+    property <length> context-x;
+    property <length> context-y;
+    context-menu := PopupWindow {
+        x: min(root.context-x, root.width - 202px);
+        y: min(root.context-y, root.height - 260px);
+        width: 200px;
+        MenuPanel {
+            VerticalLayout {
+                padding: 4px;
+                MenuRow {
+                    text: "Browse for executable...";
+                    activated => {
+                        context-menu.close();
+                        root.browse();
+                    }
+                }
+                MenuSeparator { }
+                MenuRow {
+                    text: "Explorer";
+                    activated => {
+                        context-menu.close();
+                        root.launch-tool("explorer");
+                    }
+                }
+                MenuRow {
+                    text: "Registry Editor";
+                    activated => {
+                        context-menu.close();
+                        root.launch-tool("regedit");
+                    }
+                }
+                MenuRow {
+                    text: "Task Manager";
+                    activated => {
+                        context-menu.close();
+                        root.launch-tool("taskmgr");
+                    }
+                }
+                MenuRow {
+                    text: "Wine Configuration";
+                    activated => {
+                        context-menu.close();
+                        root.launch-tool("winecfg");
+                    }
+                }
+                MenuSeparator { }
+                MenuRow {
+                    text: "Copy compatdata path";
+                    activated => {
+                        context-menu.close();
+                        root.copy-compatdata();
+                    }
+                }
+                MenuRow {
+                    text: "Copy compatibility tool path";
+                    activated => {
+                        context-menu.close();
+                        root.copy-tool-path();
+                    }
+                }
+                MenuSeparator { }
+                MenuRow {
+                    text: "Delete Shader Cache";
+                    enabled: root.cache-exists;
+                    activated => {
+                        context-menu.close();
+                        root.delete-shader-cache();
+                    }
+                }
+            }
+        }
+    }
+
+    // While a dialog is open, an invisible layer swallows the mouse.
+    if root.dialog-open: TouchArea { }
+
+    init => {
+        keys.focus();
+    }
+}

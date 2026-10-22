@@ -1,0 +1,349 @@
+// Shared Breeze-style building blocks. Every colour and metric comes from the
+// `Theme` global; the mouse cursor stays the default arrow over buttons, as in
+// Qt/KDE (TouchArea only changes it when asked).
+
+import { Theme } from "theme.slint";
+
+// A Lucide icon in the given colour.
+export component Icon inherits Image {
+    in property <length> size: Theme.font-size;
+    width: self.size;
+    height: self.size;
+    image-fit: contain;
+}
+
+// The Breeze outline button of the action row and every dialog: 32 px high,
+// at least 80 px wide, with an optional leading icon. `default-focus` paints
+// the focus border Qt shows on a dialog's default button.
+export component OutlineButton {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> enabled: true;
+    in property <bool> default-focus: false;
+    callback clicked;
+
+    // Whole pixels so the 1 px outline lands on the pixel grid.
+    property <length> natural: ceil((content.preferred-width + 30px) / 1px) * 1px;
+    min-width: max(80px, self.natural);
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+    height: 32px;
+
+    property <bool> hot: root.enabled && (touch.has-hover || touch.pressed);
+
+    Rectangle {
+        border-radius: Theme.radius;
+        border-width: 1px;
+        background: !root.enabled
+            ? Theme.input-background.transparentize(Theme.disabled-opacity)
+            : touch.pressed ? Theme.accent : Theme.input-background;
+        border-color: !root.enabled
+            ? Theme.input-border.transparentize(Theme.disabled-opacity)
+            : root.hot ? Theme.primary
+            : root.default-focus ? Theme.ring : Theme.input-border;
+    }
+
+    content := HorizontalLayout {
+        alignment: center;
+        spacing: 4px;
+        if root.has-icon: Icon {
+            y: (parent.height - self.height) / 2;
+            source: root.icon;
+            colorize: label.color;
+        }
+        label := Text {
+            text: root.text;
+            vertical-alignment: center;
+            color: root.enabled
+                ? Theme.button-foreground
+                : Theme.muted-foreground.transparentize(Theme.disabled-opacity);
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The transparent toolbar button (hamburger and Refresh): gpui's medium ghost
+// button, 2 rem high; hover, press, or `active` fill it with `primary`.
+export component ToolbarButton {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    in property <length> padding-x: 0px;
+    callback clicked;
+
+    height: Theme.rem(8);
+    min-width: root.text == "" ? self.height : content.preferred-width + 2 * root.padding-x;
+    preferred-width: self.min-width;
+    horizontal-stretch: 0;
+
+    property <bool> hot: root.enabled && (touch.has-hover || touch.pressed || root.active);
+    property <color> fg: !root.enabled
+        ? Theme.foreground.transparentize(Theme.disabled-opacity)
+        : root.hot ? Theme.primary-foreground : Theme.foreground;
+
+    Rectangle {
+        border-radius: Theme.radius;
+        background: root.hot ? Theme.primary : transparent;
+    }
+
+    content := HorizontalLayout {
+        padding-left: root.padding-x;
+        padding-right: root.padding-x;
+        alignment: center;
+        spacing: Theme.rem(2);
+        Icon {
+            y: (parent.height - self.height) / 2;
+            source: root.icon;
+            colorize: root.fg;
+        }
+        if root.text != "": Text {
+            text: root.text;
+            vertical-alignment: center;
+            color: root.fg;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One popup-menu item at the theme's base font size; hovering tints it with
+// the selection at 0.3.
+export component MenuRow {
+    in property <string> text;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> enabled: true;
+    callback activated;
+
+    height: 28px;
+
+    Rectangle {
+        border-radius: Theme.radius;
+        background: root.enabled && touch.has-hover ? Theme.accent : transparent;
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: Theme.rem(1);
+        if root.has-icon: Icon {
+            size: Theme.font-size - 2px;
+            y: (parent.height - self.height) / 2;
+            source: root.icon;
+            colorize: label.color;
+        }
+        label := Text {
+            text: root.text;
+            vertical-alignment: center;
+            color: root.enabled
+                ? Theme.menu-foreground
+                : Theme.menu-foreground.transparentize(Theme.disabled-opacity);
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.activated();
+        }
+    }
+}
+
+// A horizontal menu separator with breathing room above and below.
+export component MenuSeparator {
+    height: 9px;
+    Rectangle {
+        y: 4px;
+        height: 1px;
+        background: Theme.border;
+    }
+}
+
+// The popup panel: KDE draws menus on the window fill, framed and rounded.
+export component MenuPanel inherits Rectangle {
+    background: Theme.menu-background;
+    border-color: Theme.border;
+    border-width: 1px;
+    border-radius: Theme.radius;
+}
+
+// A Breeze scrollbar: the window fill as the groove, the text at half alpha
+// as the resting handle, the selection while hovered or dragged. `offset` is
+// the (negative) content offset of the scrolled view.
+export component ScrollBar {
+    in property <bool> horizontal: false;
+    in property <length> visible-length;
+    in property <length> content-length;
+    in-out property <length> offset;
+
+    property <length> track: root.horizontal ? root.width : root.height;
+    property <length> max-offset: max(1px, root.content-length - root.visible-length);
+    property <length> thumb: min(
+        root.track,
+        max(Theme.scrollbar-min-thumb, root.track * root.visible-length / max(1px, root.content-length)));
+    property <length> thumb-start: (root.track - root.thumb) * (-root.offset / root.max-offset);
+    property <length> grab;
+
+    Rectangle {
+        background: Theme.scrollbar-track;
+    }
+
+    Rectangle {
+        x: root.horizontal ? root.thumb-start : (parent.width - Theme.scroller-width) / 2;
+        y: root.horizontal ? (parent.height - Theme.scroller-width) / 2 : root.thumb-start;
+        width: root.horizontal ? root.thumb : Theme.scroller-width;
+        height: root.horizontal ? Theme.scroller-width : root.thumb;
+        border-radius: Theme.scroller-width / 2;
+        background: touch.pressed
+            ? Theme.scrollbar-thumb-active
+            : touch.has-hover ? Theme.scrollbar-thumb-hover : Theme.scrollbar-thumb;
+    }
+
+    touch := TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.grab = -root.offset;
+            }
+        }
+        moved => {
+            if self.pressed {
+                root.offset = -clamp(
+                    root.grab
+                        + (root.horizontal ? self.mouse-x - self.pressed-x : self.mouse-y - self.pressed-y)
+                        * root.max-offset / max(1px, root.track - root.thumb),
+                    0px,
+                    root.content-length - root.visible-length);
+            }
+        }
+    }
+}
+
+// A scrolled view with Breeze scrollbars that overlay the content's right and
+// bottom edges while it overflows, as gpui's did.
+export component ScrollArea {
+    in property <length> content-width;
+    in property <length> content-height;
+    in-out property <length> offset-x <=> flick.content-x;
+    in-out property <length> offset-y <=> flick.content-y;
+    out property <length> visible-width: flick.width;
+    out property <length> visible-height: flick.height;
+    callback scrolled();
+
+    property <bool> overflow-x: root.content-width > flick.width + 0.5px;
+    property <bool> overflow-y: root.content-height > flick.height + 0.5px;
+
+    flick := Flickable {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        content-width: max(root.content-width, self.width);
+        content-height: max(root.content-height, self.height);
+        @children
+    }
+
+    // Keep the offsets inside the content when either size changes.
+    public function clamp-offsets() {
+        flick.content-x = clamp(flick.content-x, min(0px, flick.width - flick.content-width), 0px);
+        flick.content-y = clamp(flick.content-y, min(0px, flick.height - flick.content-height), 0px);
+    }
+
+    // Scroll to the end of the content (a no-op before the first layout).
+    public function scroll-to-bottom() {
+        flick.content-y = min(0px, flick.height - flick.content-height);
+    }
+
+    changed visible-height => {
+        root.clamp-offsets();
+    }
+    changed visible-width => {
+        root.clamp-offsets();
+    }
+    changed content-height => {
+        root.clamp-offsets();
+    }
+    changed content-width => {
+        root.clamp-offsets();
+    }
+
+    // Wheel, flick, scrollbar drag, or a programmatic scroll.
+    changed offset-y => {
+        root.scrolled();
+    }
+
+    if root.overflow-y: ScrollBar {
+        x: parent.width - self.width;
+        y: 0;
+        width: Theme.scrollbar-width;
+        height: parent.height - (root.overflow-x ? Theme.scrollbar-width : 0px);
+        visible-length: flick.height;
+        content-length: flick.content-height;
+        offset <=> flick.content-y;
+    }
+
+    if root.overflow-x: ScrollBar {
+        horizontal: true;
+        x: 0;
+        y: parent.height - self.height;
+        height: Theme.scrollbar-width;
+        width: parent.width - (root.overflow-y ? Theme.scrollbar-width : 0px);
+        visible-length: flick.width;
+        content-length: flick.content-width;
+        offset <=> flick.content-x;
+    }
+}
+
+// The Breeze check box: a 1 rem box filled with `primary` and a check when
+// checked; outlined like the buttons when not.
+export component CheckBox {
+    in property <string> text;
+    in-out property <bool> checked;
+    callback toggled(bool);
+
+    height: max(box.height, label.preferred-height);
+
+    box := Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: round(Theme.font-size / 1px) * 1px;
+        height: self.width;
+        border-radius: Theme.radius - 1px;
+        border-width: 1px;
+        background: root.checked ? Theme.primary : Theme.input-background;
+        border-color: root.checked || touch.has-hover ? Theme.primary : Theme.input-border;
+        if root.checked: Icon {
+            size: parent.width - 2px;
+            source: @image-url("../assets/icons/check.svg");
+            colorize: Theme.primary-foreground;
+        }
+    }
+
+    label := Text {
+        x: box.width + Theme.rem(2);
+        // gpui's checkbox label is text_sm (0.875 rem).
+        font-size: Theme.font-size * 0.875;
+        text: root.text;
+        vertical-alignment: center;
+        color: Theme.foreground;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+}

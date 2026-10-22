@@ -1,34 +1,39 @@
 //! protonctx — launch executables inside a Steam game's Proton context.
 //!
-//! The whole application is safe Rust: the UI is an `iced` daemon
-//! ([`app::State`]) rendered with tiny-skia, and the Steam/Proton logic lives
-//! in the pure-Rust backend modules.
+//! All hand-written code is safe Rust: the UI is Slint ([`ui`], driven by
+//! [`app`]) on X11 with the software renderer, and the Steam/Proton logic
+//! lives in the pure-Rust backend modules.
 
-#![forbid(unsafe_code)]
+// `deny`, not `forbid`: the code Slint generates from `ui/*.slint` (static
+// item-tree vtables) carries its own `#[allow(unsafe_code)]`, which `forbid`
+// would reject. Hand-written code here still cannot use `unsafe`.
+#![deny(unsafe_code)]
 // Test fixtures may panic on setup failure (`unwrap` is fine in tests); the
 // `unwrap_used = "deny"` workspace lint applies to production code only.
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod app;
-mod assets;
 mod background;
 mod config;
 mod flatpak;
 mod games;
 mod launcher;
 mod log;
-mod menu;
+mod log_buffer;
 mod models;
+mod state;
 mod steam;
 mod system_theme;
 #[cfg(test)]
 mod test_support;
 mod theme;
-mod views;
+mod ui;
 #[cfg(test)]
 mod visual_tests;
 mod x11_dialog;
 mod xdg;
+
+use slint::ComponentHandle as _;
 
 /// `--preset light|dark` forces the bundled Breeze preset instead of the live
 /// KDE scheme (a development switch for spot checks).
@@ -50,26 +55,14 @@ fn preset_arg() -> Option<bool> {
     None
 }
 
-fn main() -> iced::Result {
-    // The static desktop theme, read once before the first window opens. The
-    // platform appearance is never observed afterwards (no live switching).
-    let loaded = system_theme::load(preset_arg());
-    let (iced_theme, tokens) = theme::build(&loaded);
-    let (font, font_size) = (tokens.font, tokens.font_size);
-    theme::install(tokens);
+fn main() -> Result<(), slint::PlatformError> {
+    // The static desktop theme, read once before the first window opens.
+    let tokens = theme::build(&system_theme::load(preset_arg()));
 
-    iced::daemon(
-        move || app::State::new(iced_theme.clone()),
-        app::State::update,
-        app::State::view,
-    )
-    .title(app::State::title)
-    .theme(app::State::theme)
-    .subscription(app::State::subscription)
-    .default_font(font)
-    .settings(iced::Settings {
-        default_text_size: font_size.into(),
-        ..iced::Settings::default()
-    })
-    .run()
+    ui::select_backend()?;
+    let main = ui::MainWindow::new()?;
+    ui::apply_theme(&main, &tokens);
+    let _app = app::start(&main, tokens);
+    main.show()?;
+    slint::run_event_loop_until_quit()
 }

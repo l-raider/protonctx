@@ -8,17 +8,6 @@
 
 use crate::models::Game;
 
-pub const COLUMN_NAMES: [&str; 3] = ["Game", "App ID", "Compatibility Tool"];
-
-/// Built-in Wine tools shared by the action row and the row context menu:
-/// `(label, tool id passed to the launcher)`.
-pub const TOOL_BUTTONS: [(&str, &str); 4] = [
-    ("Explorer", "explorer"),
-    ("Registry Editor", "regedit"),
-    ("Task Manager", "taskmgr"),
-    ("Wine Configuration", "winecfg"),
-];
-
 /// The sort state of a column. The live table only ever uses `Ascending` and
 /// `Descending`; `Default` is the neutral state that keeps discovery order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -63,16 +52,6 @@ impl GameRow {
             compat_tool: self.compat_tool.clone(),
             library_path: self.library_path.clone(),
             proton_dir: self.proton_dir.clone(),
-        }
-    }
-
-    /// The text shown in `column` (0 = Game, 1 = App ID, 2 = Compatibility
-    /// Tool).
-    pub fn cell_text(&self, column: usize) -> String {
-        match column {
-            0 => self.name.clone(),
-            1 => self.app_id.to_string(),
-            _ => self.compat_tool.clone(),
         }
     }
 }

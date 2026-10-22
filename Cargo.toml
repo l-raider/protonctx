@@ -7,40 +7,30 @@ license = "GPL-3.0-only"
 description = "Launch executables inside a Steam game's Proton context"
 repository = "https://github.com/l-raider/protonctx"
 
-# Opt into the workspace lints (forbid unsafe + clippy denies below).
+# Opt into the workspace lints (deny unsafe + clippy denies below).
 [lints]
 workspace = true
 
 [dependencies]
-iced = { version = "0.14", default-features = false, features = [
-    "tiny-skia",
-    "x11",
-    "thread-pool",
-    "crisp",
-    "svg",
-    "image",
-    "canvas",
-    "advanced",
-    "lazy",
+# Slint on X11 (XWayland on Plasma) with the CPU software renderer: the
+# like-for-like counterpart of the iced build's tiny-skia renderer. X11 so
+# dialogs can be transient children of the main window (see x11_dialog).
+slint = { version = "=1.18.1", default-features = false, features = [
+    "std",
+    "compat-1-2",
+    "backend-winit-x11",
+    "renderer-software",
+    "accessibility",
+    "unstable-winit-030",
 ] }
 native-theme = { version = "0.6.1", default-features = false }
-native-theme-iced = { version = "0.6.1", default-features = false, features = [
-    "widgets",
-    "spinner",
-    "lucide-icons",
-    "system-fonts",
-    "advanced-shaping",
-    "iced_aw",
-] }
-iced_aw = { version = "0.14.1", default-features = false, features = ["menu", "context_menu"] }
-iced_table2 = "0.14.2"
 # Dialog hints (WM_TRANSIENT_FOR, dialog type) on X11; pure Rust connection.
 x11rb = "0.13"
+# Slint has no public clipboard API; its winit backend uses arboard too.
+arboard = { version = "3.6", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-channel = "2"
-# Timers for the launch-output batch window and the spinner tick: the
-# thread-pool executor has no `iced::time`; async-io is already in the tree
-# through ashpd.
+# Timer for the launch-output batch window; already in the tree through ashpd.
 async-io = "2"
 ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser"] }
 url = "2"
@@ -52,10 +42,12 @@ serde_json = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 native-theme = { version = "0.6.1", default-features = false, features = ["linux"] }
 
+[build-dependencies]
+slint-build = "=1.18.1"
+
 [dev-dependencies]
-iced_test = "0.14"
-# `UserInterface`, to assert the cursor a hovered widget asks for.
-iced_runtime = "0.14"
+# PNG output of the headless visual snapshots (src/visual_tests.rs).
+png = "0.18"
 
 [profile.publicrelease]
 inherits = "release"
@@ -73,7 +65,9 @@ debug = 1
 strip = "none"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny` rather than `forbid`: Slint's generated UI code allows `unsafe_code`
+# locally for its static vtables (see src/main.rs).
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

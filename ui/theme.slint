@@ -1,0 +1,69 @@
+// The app's design tokens, set once from Rust (`crate::ui::apply_theme`)
+// from the resolved KDE theme. Every component reads its colours and
+// metrics from here; nothing is hard-coded to one colour scheme.
+
+export global Theme {
+    // ---- Surfaces ----
+    in-out property <color> background: #202326;
+    in-out property <color> foreground: #fcfcfc;
+    // View background: the log pane and list fill.
+    in-out property <color> muted: #141618;
+    // KDE Header colour set: toolbar and table header.
+    in-out property <color> header: #292c30;
+    in-out property <color> header-foreground: #fcfcfc;
+    in-out property <color> list-background: #141618;
+    in-out property <color> alternate-row: #1d1f22;
+    in-out property <color> list-foreground: #fcfcfc;
+    // Frame colour (QPalette::Mid).
+    in-out property <color> border: #4c4e51;
+    // Grid line: the header's column separators.
+    in-out property <color> grid: #1d1f22;
+    in-out property <color> muted-foreground: #a1a9b1;
+
+    // ---- Controls ----
+    in-out property <color> input-border: #4d545b;
+    in-out property <color> input-background: #2d3236;
+    in-out property <color> button-foreground: #fcfcfc;
+    in-out property <color> primary: #3daee9;
+    in-out property <color> primary-foreground: #fcfcfc;
+    in-out property <color> ring: #3daee9;
+    // Hover tint: the selection at 0.3.
+    in-out property <color> accent: #3daee94d;
+    // The accent composited over the even and odd row fills.
+    in-out property <color> hover-even: #1e3a4a;
+    in-out property <color> hover-odd: #253f4e;
+    // Hover fill of the selected row: highlight.lighter(110).
+    in-out property <color> selection-hover: #43bfff;
+    in-out property <color> selection: #3daee9;
+    in-out property <color> danger: #da4453;
+    in-out property <color> warning: #f67400;
+    in-out property <length> radius: 5px;
+    in-out property <float> disabled-opacity: 0.5;
+
+    // ---- Menus ----
+    in-out property <color> menu-background: #202326;
+    in-out property <color> menu-foreground: #fcfcfc;
+
+    // ---- Scrollbars ----
+    in-out property <color> scrollbar-track: #202326;
+    in-out property <color> scrollbar-thumb: #fcfcfc80;
+    in-out property <color> scrollbar-thumb-hover: #3daee9;
+    in-out property <color> scrollbar-thumb-active: #3daee9;
+    in-out property <length> scrollbar-width: 16px;
+    in-out property <length> scroller-width: 8px;
+    in-out property <length> scrollbar-min-thumb: 20px;
+
+    // ---- Fonts ----
+    in-out property <string> font-family: "Noto Sans";
+    in-out property <int> font-weight: 400;
+    in-out property <length> font-size: 13.333px;
+    in-out property <string> mono-family: "Hack";
+    in-out property <length> mono-size: 13.333px;
+    in-out property <bool> reduce-motion: false;
+
+    // `units` Tailwind steps (a quarter rem each) in whole pixels: gpui sized
+    // its spacing in rem, and its rem is the theme font size.
+    public pure function rem(units: float) -> length {
+        return round(units * font-size / 4px) * 1px;
+    }
+}

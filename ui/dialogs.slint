@@ -1,0 +1,275 @@
+// Dialog windows. Each is its own OS window with server-side decorations,
+// parented to the main window on X11 by the Rust side (`x11_dialog`). They
+// share one chrome: padding, a body, and a right-aligned footer of outline
+// buttons whose default carries Qt's focus border. Esc dismisses; Enter and
+// Space activate the default button.
+
+import { Theme } from "theme.slint";
+import { Icon, OutlineButton, CheckBox, ScrollArea } from "widgets.slint";
+
+// The keyboard and window frame shared by every dialog.
+component DialogWindow inherits Window {
+    background: Theme.background;
+    default-font-family: Theme.font-family;
+    default-font-size: Theme.font-size;
+    default-font-weight: Theme.font-weight;
+    icon: @image-url("../packaging/icons/hicolor/256x256/apps/protonctx.png");
+
+    // Esc (and the WM close button, from Rust).
+    callback dismiss();
+    // Enter / Space.
+    callback activate-default();
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.dismiss();
+                return accept;
+            }
+            if event.text == Key.Return || event.text == " " {
+                root.activate-default();
+                return accept;
+            }
+            reject
+        }
+        @children
+    }
+
+    init => {
+        keys.focus();
+    }
+}
+
+// Body copy at the theme size with Qt's 1.25 line height.
+component BodyText inherits Text {
+    color: Theme.foreground;
+    wrap: word-wrap;
+    // Qt's message boxes use 1.25 × the font size; Slint's factor scales
+    // the font's own line height (about 1.36 × for Noto Sans).
+    line-height-factor: 0.92;
+    vertical-alignment: top;
+}
+
+export component AboutDialog inherits DialogWindow {
+    title: "About protonctx";
+    width: 400px;
+    height: 200px;
+    in property <string> version;
+    callback ok();
+    dismiss => {
+        root.ok();
+    }
+    activate-default => {
+        root.ok();
+    }
+
+    VerticalLayout {
+        padding: Theme.rem(4);
+        spacing: Theme.rem(2);
+        VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: Theme.rem(2);
+            HorizontalLayout {
+                alignment: center;
+                Image {
+                    width: 64px;
+                    height: 64px;
+                    source: @image-url("../packaging/icons/hicolor/256x256/apps/protonctx.png");
+                }
+            }
+            Text {
+                text: root.version;
+                font-weight: 600;
+                horizontal-alignment: center;
+                line-height-factor: 0.92;
+                color: Theme.foreground;
+            }
+            Text {
+                text: "Launch executables inside a Steam game's Proton context.";
+                horizontal-alignment: center;
+                line-height-factor: 0.92;
+                color: Theme.foreground;
+            }
+            Text {
+                text: "Licensed under the GNU GPL v3.";
+                horizontal-alignment: center;
+                line-height-factor: 0.92;
+                color: Theme.muted-foreground;
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            OutlineButton {
+                text: "OK";
+                has-icon: true;
+                icon: @image-url("../assets/icons/check.svg");
+                default-focus: true;
+                clicked => {
+                    root.ok();
+                }
+            }
+        }
+    }
+}
+
+export component SettingsDialog inherits DialogWindow {
+    title: "Settings";
+    width: 300px;
+    height: 100px;
+    in-out property <bool> remember-last-dir: true;
+    callback remember-changed(bool);
+    callback ok();
+    dismiss => {
+        root.ok();
+    }
+    activate-default => {
+        root.ok();
+    }
+
+    VerticalLayout {
+        padding: Theme.rem(4);
+        spacing: Theme.rem(2);
+        VerticalLayout {
+            vertical-stretch: 1;
+            alignment: start;
+            CheckBox {
+                text: "Remember last used directory";
+                checked <=> root.remember-last-dir;
+                toggled(value) => {
+                    root.remember-changed(value);
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            OutlineButton {
+                text: "OK";
+                has-icon: true;
+                icon: @image-url("../assets/icons/check.svg");
+                default-focus: true;
+                clicked => {
+                    root.ok();
+                }
+            }
+        }
+    }
+}
+
+export component ErrorDialog inherits DialogWindow {
+    title: "Launch Error";
+    width: 500px;
+    height: 130px;
+    in property <string> message;
+    callback ok();
+    dismiss => {
+        root.ok();
+    }
+    activate-default => {
+        root.ok();
+    }
+
+    VerticalLayout {
+        padding: Theme.rem(4);
+        spacing: Theme.rem(2);
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.rem(5);
+            alignment: start;
+            // Qt's filled danger circle with a white cross.
+            VerticalLayout {
+                alignment: start;
+                Rectangle {
+                    width: 56px;
+                    height: 56px;
+                    border-radius: 28px;
+                    background: Theme.danger;
+                    Icon {
+                        size: 32px;
+                        source: @image-url("../assets/icons/x.svg");
+                        colorize: white;
+                    }
+                }
+            }
+            BodyText {
+                horizontal-stretch: 1;
+                text: root.message;
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            OutlineButton {
+                text: "OK";
+                has-icon: true;
+                icon: @image-url("../assets/icons/check.svg");
+                default-focus: true;
+                clicked => {
+                    root.ok();
+                }
+            }
+        }
+    }
+}
+
+export component DeleteCacheDialog inherits DialogWindow {
+    title: "Delete Shader Cache";
+    width: 520px;
+    height: 230px;
+    in property <string> message;
+    // While the deletion runs the buttons are disabled.
+    in property <bool> deleting: false;
+    callback yes();
+    callback no();
+    dismiss => {
+        root.no();
+    }
+    // No is the default (the safe choice, as in Qt).
+    activate-default => {
+        root.no();
+    }
+
+    VerticalLayout {
+        padding: Theme.rem(4);
+        spacing: Theme.rem(2);
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: Theme.rem(3);
+            alignment: start;
+            VerticalLayout {
+                alignment: start;
+                Icon {
+                    size: 56px;
+                    source: @image-url("../assets/icons/triangle-alert.svg");
+                    colorize: Theme.warning;
+                }
+            }
+            BodyText {
+                horizontal-stretch: 1;
+                text: root.message;
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: Theme.rem(2);
+            OutlineButton {
+                text: "Yes";
+                has-icon: true;
+                icon: @image-url("../assets/icons/check.svg");
+                enabled: !root.deleting;
+                clicked => {
+                    root.yes();
+                }
+            }
+            OutlineButton {
+                text: "No";
+                has-icon: true;
+                icon: @image-url("../assets/icons/ban.svg");
+                enabled: !root.deleting;
+                default-focus: true;
+                clicked => {
+                    root.no();
+                }
+            }
+        }
+    }
+}

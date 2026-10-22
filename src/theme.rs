@@ -1,19 +1,69 @@
-//! The iced palette and the app's token sidecar.
+//! The app's design tokens, derived from the desktop theme.
 //!
-//! [`build`] turns the resolved desktop theme into an `iced::Theme` (through
-//! `native_theme_iced::to_theme`) plus an [`AppTokens`] value that carries
-//! every colour and metric the views paint with, Breeze overrides included.
-//! The tokens are installed once at startup ([`install`]) and read from style
-//! closures through [`tokens`]; the theme never changes at runtime.
+//! [`build`] turns the resolved desktop theme into an [`AppTokens`] value that
+//! carries every colour and metric the UI paints with, Breeze overrides
+//! included. The tokens are toolkit-neutral; [`crate::ui`] copies them into
+//! the Slint `Theme` global once at startup. The theme never changes at
+//! runtime.
 
-use std::sync::OnceLock;
-
-use iced::font::{Family, Weight};
-use iced::{Color, Font};
+use native_theme::color::Rgba;
 use native_theme::theme::{ResolvedFontSpec, ResolvedTheme};
-use native_theme_iced::palette::to_color;
 
 use crate::system_theme::LoadedTheme;
+
+/// A linear RGBA colour, each channel 0–1 in sRGB.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Color {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+}
+
+impl Color {
+    pub const WHITE: Color = Color::from_rgb(1.0, 1.0, 1.0);
+
+    pub const fn from_rgb(r: f32, g: f32, b: f32) -> Self {
+        Self { r, g, b, a: 1.0 }
+    }
+
+    pub fn from_rgb8(r: u8, g: u8, b: u8) -> Self {
+        Self::from_rgba8(r, g, b, 1.0)
+    }
+
+    pub fn from_rgba8(r: u8, g: u8, b: u8, a: f32) -> Self {
+        Self {
+            r: f32::from(r) / 255.0,
+            g: f32::from(g) / 255.0,
+            b: f32::from(b) / 255.0,
+            a,
+        }
+    }
+
+    /// The colour as 8-bit channels, rounded.
+    pub fn to_rgba8(self) -> [u8; 4] {
+        let channel = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+        [
+            channel(self.r),
+            channel(self.g),
+            channel(self.b),
+            channel(self.a),
+        ]
+    }
+}
+
+impl From<Color> for slint::Color {
+    fn from(color: Color) -> Self {
+        let [r, g, b, a] = color.to_rgba8();
+        slint::Color::from_argb_u8(a, r, g, b)
+    }
+}
+
+/// `rgba` from the resolved theme.
+fn to_color(rgba: Rgba) -> Color {
+    let [r, g, b, a] = rgba.to_f32_array();
+    Color { r, g, b, a }
+}
 
 /// Alpha of the KDE selection colour used for hover accents (menu items and
 /// table rows).
@@ -28,18 +78,12 @@ const FRAME_CONTRAST: f32 = 0.2;
 /// fill moved 4 % towards the text.
 const GRID_CONTRAST: f32 = 0.04;
 
-/// Weight of the table header labels: Breeze draws headers at Medium, not
-/// Bold.
-pub const HEADER_WEIGHT: Weight = Weight::Medium;
-
 /// Every colour and metric the views read, resolved once from the desktop
 /// theme.
 #[derive(Clone, Debug)]
 pub struct AppTokens {
     /// The desktop's reduced-motion preference (the spinner stands still).
     pub reduce_motion: bool,
-    /// The resolved theme itself, for `native-theme-iced` style functions.
-    pub resolved: ResolvedTheme,
 
     // ---- Surfaces ----
     /// Window background (`QPalette::Window`).
@@ -104,45 +148,30 @@ pub struct AppTokens {
     pub scrollbar_thumb_active: Color,
     pub scrollbar_width: f32,
     pub scroller_width: f32,
+    pub scrollbar_min_thumb: f32,
 
     // ---- Fonts ----
-    pub font: Font,
+    pub font_family: String,
+    pub font_weight: u16,
     pub font_size: f32,
-    pub header_font: Font,
-    pub semibold_font: Font,
-    pub mono_font: Font,
+    pub mono_family: String,
     pub mono_size: f32,
 }
 
-impl AppTokens {
-    /// `units` Tailwind steps (a quarter rem each) in whole pixels. gpui-kit
-    /// sized its spacing in rem, and its rem is the theme font size, so
-    /// `px_1` there is 3.33 px at KDE's 10 pt; rounding keeps edges crisp.
-    pub fn rem(&self, units: f32) -> f32 {
-        (units * self.font_size / 4.0).round()
+/// The tokens for `loaded`.
+pub fn build(loaded: &LoadedTheme) -> AppTokens {
+    tokens_for(loaded)
+}
+
+/// `size` scaled by the desktop's text-scaling preference (ignored when it is
+/// not a finite positive factor).
+fn scaled(size: f32, prefs: &native_theme::AccessibilityPreferences) -> f32 {
+    let factor = prefs.text_scaling_factor;
+    if factor.is_finite() && factor > 0.0 {
+        size * factor
+    } else {
+        size
     }
-}
-
-static TOKENS: OnceLock<AppTokens> = OnceLock::new();
-
-/// Installs the startup tokens. Only the first call wins; the theme is static.
-pub fn install(tokens: AppTokens) {
-    let _ = TOKENS.set(tokens);
-}
-
-/// The installed tokens. Before [`install`] (unit tests) this is the
-/// deterministic Breeze Dark preset.
-pub fn tokens() -> &'static AppTokens {
-    TOKENS.get_or_init(|| {
-        let loaded = crate::system_theme::preset(&Default::default(), true);
-        build(&loaded).1
-    })
-}
-
-/// The iced theme and the token sidecar for `loaded`.
-pub fn build(loaded: &LoadedTheme) -> (iced::Theme, AppTokens) {
-    let theme = native_theme_iced::to_theme(&loaded.resolved, &loaded.name);
-    (theme, tokens_for(loaded))
 }
 
 /// `color` with its alpha replaced by `alpha`.
@@ -210,22 +239,6 @@ pub fn qt_lighter(color: Color, factor: f32) -> Color {
     }
 }
 
-/// A family name iced can address. iced's `Family::Name` takes a
-/// `&'static str`; the theme is read once, so each family is leaked once.
-fn family_of(spec: &ResolvedFontSpec) -> Family {
-    let name = native_theme_iced::system_font_family(spec);
-    Family::Name(Box::leak(name.to_string().into_boxed_str()))
-}
-
-/// The iced font for `spec`, at its stated weight.
-fn font_of(spec: &ResolvedFontSpec) -> Font {
-    Font {
-        family: family_of(spec),
-        weight: native_theme_iced::to_iced_weight(spec.weight),
-        ..Font::DEFAULT
-    }
-}
-
 fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
     let r: &ResolvedTheme = &loaded.resolved;
     let d = &r.defaults;
@@ -244,12 +257,8 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
     };
     let primary = to_color(r.button.primary_background);
 
-    let font = font_of(&d.font);
-    let mono_font = font_of(&d.mono_font);
-
     AppTokens {
         reduce_motion: loaded.prefs.reduce_motion,
-        resolved: r.clone(),
 
         background,
         foreground,
@@ -289,30 +298,25 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
                 .unwrap_or(r.scrollbar.thumb_hover_color),
         ),
         scrollbar_width: r.scrollbar.groove_width,
-        // Breeze's 20 px minimum handle length has no receiver: iced
-        // 0.14 fixes the scroller's minimum length itself.
         scroller_width: r.scrollbar.thumb_width,
+        scrollbar_min_thumb: r.scrollbar.min_thumb_length,
 
-        font,
-        font_size: native_theme_iced::font_size(r, &loaded.prefs),
-        header_font: Font {
-            weight: HEADER_WEIGHT,
-            ..font
-        },
-        semibold_font: Font {
-            weight: Weight::Semibold,
-            ..font
-        },
-        mono_font,
-        mono_size: native_theme_iced::mono_font_size(r, &loaded.prefs),
+        font_family: family(&d.font),
+        font_weight: d.font.weight,
+        font_size: scaled(d.font.size, &loaded.prefs),
+        mono_family: family(&d.mono_font),
+        mono_size: scaled(d.mono_font.size, &loaded.prefs),
     }
+}
+
+/// The font family name of `spec`.
+fn family(spec: &ResolvedFontSpec) -> String {
+    spec.family.to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use iced::Color;
-
-    use super::{ACCENT_ALPHA, build, qt_lighter};
+    use super::{ACCENT_ALPHA, Color, build, qt_lighter};
     use crate::system_theme::preset;
 
     fn hex(rgb: u32) -> Color {
@@ -333,11 +337,10 @@ mod tests {
     #[test]
     fn breeze_dark_tokens_match_the_pinned_values() {
         let loaded = preset(&Default::default(), true);
-        let (theme, t) = build(&loaded);
+        let t = build(&loaded);
 
         assert!(loaded.is_dark);
         assert_close(t.background, hex(0x202326), "window background");
-        assert_close(theme.palette().background, hex(0x202326), "iced palette");
         assert_close(t.muted, hex(0x141618), "view / muted");
         // The preset's header is the view colour; the live KDE Header colour
         // (#292C30) is asserted through the KDE reader in `system_theme`.
@@ -368,12 +371,13 @@ mod tests {
         assert_eq!(t.scroller_width, 8.0);
         assert_eq!(t.font_size, 10.0 * 96.0 / 72.0);
         assert_eq!(t.mono_size, 10.0 * 96.0 / 72.0);
-        assert_eq!(t.header_font.weight, iced::font::Weight::Medium);
+        assert_eq!(t.font_family, "Noto Sans");
+        assert_eq!(t.mono_family, "Hack");
     }
 
     #[test]
     fn breeze_dark_grid_is_close_to_the_pinned_shade() {
-        let t = build(&preset(&Default::default(), true)).1;
+        let t = build(&preset(&Default::default(), true));
         // ≈ #1C1E21: within a couple of steps per channel.
         let expected = hex(0x1C1E21);
         let near = |a: f32, b: f32| (a - b).abs() <= 3.0 / 255.0;
@@ -387,7 +391,7 @@ mod tests {
     #[test]
     fn breeze_light_tokens_match_the_pinned_values() {
         let loaded = preset(&Default::default(), false);
-        let t = build(&loaded).1;
+        let t = build(&loaded);
 
         assert!(!loaded.is_dark);
         assert_close(t.background, hex(0xEFF0F1), "window background");

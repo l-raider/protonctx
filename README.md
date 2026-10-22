@@ -5,9 +5,9 @@ Helper GUI tool to launch executables inside a Steam game's Proton context.
 
 A single-window Linux (mainly KDE Plasma) utility that lists installed Steam games and lets
 you run an arbitrary `.exe` (or a built-in Wine tool such as `winecfg`/`taskmgr`) inside a
-selected game's Proton prefix. The UI is built with [iced](https://iced.rs/) using its
-CPU renderer (tiny-skia) and follows the KDE colour scheme and fonts — no Qt or C++
-toolchain is required to build it.
+selected game's Proton prefix. The UI is built with [Slint](https://slint.dev/) using its
+software renderer and follows the KDE colour scheme and fonts — no Qt or C++ toolchain
+is required to build it.
 
 ## Features
 
@@ -63,8 +63,8 @@ takes a few minutes. `cargo run -- --preset light` (or `dark`) forces the bundle
 Breeze colours instead of the live KDE scheme.
 
 protonctx runs as an X11 client (XWayland on a Plasma Wayland session, which Plasma 6.8
-keeps after dropping the X11 session). iced 0.14 cannot make one window the child of
-another on Wayland, but on X11 that is a window property: the About, Settings and
+keeps after dropping the X11 session). Slint (through winit) cannot make one window the
+child of another on Wayland, but on X11 that is a window property: the About, Settings and
 confirmation dialogs are marked transient for the main window (`WM_TRANSIENT_FOR`,
 dialog type, modal), so they stay off the taskbar, open centred on the main window and
 stay above it, like Qt dialogs. With fractional display scaling, sharpness follows

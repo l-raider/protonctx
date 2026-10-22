@@ -2,8 +2,8 @@
 //!
 //! KDE is the supported desktop: `native-theme` reads the live `kdeglobals`
 //! scheme (colors, typography, DPI, accessibility) once at startup and the
-//! active variant is handed to [`crate::theme`], which builds the iced
-//! palette and the app's token sidecar from it. Live scheme changes are out of
+//! active variant is handed to [`crate::theme`], which builds the app's
+//! design tokens from it. Live scheme changes are out of
 //! scope. Off KDE (and in tests, which must stay deterministic) the bundled
 //! Breeze preset is used instead. Before use, the resolved variant also has
 //! its fonts re-derived at the base logical DPI and its scrollbar model
@@ -13,9 +13,9 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
+use native_theme::color::Rgba;
 use native_theme::theme::{ColorMode, FontSize, ResolvedFontSpec, ResolvedTheme};
 use native_theme::{AccessibilityPreferences, SystemTheme};
-use native_theme_iced::Rgba;
 
 /// Breeze preset used when the platform reader fails or the desktop is not
 /// KDE.
@@ -54,7 +54,6 @@ const SCROLLBAR_THUMB_ALPHA: f32 = 0.5;
 #[derive(Clone, Debug)]
 pub struct LoadedTheme {
     pub resolved: ResolvedTheme,
-    pub name: String,
     pub is_dark: bool,
     pub prefs: AccessibilityPreferences,
 }
@@ -145,7 +144,6 @@ pub fn load(preset_mode: Option<bool>) -> LoadedTheme {
             normalize(&mut resolved);
             LoadedTheme {
                 resolved,
-                name: system.name.to_string(),
                 is_dark,
                 prefs: system.accessibility,
             }
@@ -203,23 +201,22 @@ fn read_system_theme() -> Result<SystemTheme, String> {
 /// reported and iced's built-in palette colours are used by the caller via
 /// the same preset in the other mode.
 pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
-    let resolve = |is_dark: bool| -> native_theme::Result<(String, ResolvedTheme)> {
+    let resolve = |is_dark: bool| -> native_theme::Result<ResolvedTheme> {
         let spec = native_theme::theme::Theme::preset(FALLBACK_PRESET)?;
-        let name = spec.name.to_string();
         let variant = spec.into_variant(if is_dark {
             ColorMode::Dark
         } else {
             ColorMode::Light
         })?;
-        Ok((name, variant.resolve_system()?))
+        variant.resolve_system()
     };
 
-    let (name, mut resolved, is_dark) = match resolve(is_dark) {
-        Ok((name, resolved)) => (name, resolved, is_dark),
+    let (mut resolved, is_dark) = match resolve(is_dark) {
+        Ok(resolved) => (resolved, is_dark),
         Err(error) => {
             eprintln!("protonctx: the {FALLBACK_PRESET} preset failed to resolve ({error})");
             match resolve(!is_dark) {
-                Ok((name, resolved)) => (name, resolved, !is_dark),
+                Ok(resolved) => (resolved, !is_dark),
                 // Both bundled variants failing means the binary itself is
                 // broken; there is no theme data left to fall back to.
                 Err(error) => panic!("the bundled {FALLBACK_PRESET} preset is unusable: {error}"),
@@ -229,7 +226,6 @@ pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
     normalize(&mut resolved);
     LoadedTheme {
         resolved,
-        name,
         is_dark,
         prefs: prefs.clone(),
     }
@@ -241,7 +237,8 @@ pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
 #[cfg(target_os = "linux")]
 fn is_kde(desktop: Option<&str>) -> bool {
     desktop.is_some_and(|desktop| {
-        native_theme::detect::parse_linux_desktop(desktop) == native_theme_iced::LinuxDesktop::Kde
+        native_theme::detect::parse_linux_desktop(desktop)
+            == native_theme::detect::LinuxDesktop::Kde
     })
 }
 
@@ -253,8 +250,8 @@ fn is_kde(_desktop: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use native_theme::color::Rgba;
     use native_theme::theme::{FontSize, FontStyle, ResolvedFontSpec};
-    use native_theme_iced::Rgba;
 
     use super::{
         AccessibilityPreferences, font_size_at_base_dpi, is_kde, normalize_resolved_fonts, preset,
@@ -343,7 +340,6 @@ mod tests {
     fn preset_selects_the_requested_variant_and_normalizes_it() {
         let light = preset(&AccessibilityPreferences::default(), false);
         assert!(!light.is_dark);
-        assert_eq!(light.name, "KDE Breeze");
         let r = &light.resolved;
         assert_eq!(r.defaults.background_color, Rgba::rgb(0xEF, 0xF0, 0xF1));
         // 10 pt at the base logical DPI, independent of the display DPI.

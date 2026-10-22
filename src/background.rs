@@ -1,13 +1,10 @@
 //! Work that runs off the UI thread: the launch-output feed (pipe reader and
-//! exit-watcher threads feeding a bounded channel, drained by a
-//! subscription), the spinner tick, and the portal file chooser.
+//! exit-watcher threads feeding a bounded channel, drained in batches on the
+//! UI event loop) and the portal file chooser.
 
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::process::ExitStatus;
-use std::time::{Duration, Instant};
-
-use iced::futures::{Stream, StreamExt, stream};
+use std::time::Duration;
 
 /// Backpressure cap for launch output events. The reader threads block when
 /// the queue is full, which backpressures the child's pipe; without a bound,
@@ -17,9 +14,6 @@ pub const LAUNCH_EVENT_CAPACITY: usize = 1024;
 /// Launch output is delivered in batches, one per ~16 ms window, so a chatty
 /// process costs one update per frame rather than one per line.
 const BATCH_WINDOW: Duration = Duration::from_millis(16);
-
-/// The spinner's frame interval while a launch runs.
-const SPINNER_TICK: Duration = Duration::from_millis(33);
 
 /// Events sent from the launch reader/watcher threads to the UI.
 #[derive(Clone, Debug)]
@@ -44,39 +38,19 @@ pub fn exit_message(result: &Result<ExitStatus, String>) -> String {
     }
 }
 
-/// The receiving end of the launch channel, as subscription data. The
-/// subscription's identity is the feed itself, not the channel handle, so it
-/// hashes to a constant: there is one feed for the app's lifetime.
-#[derive(Clone)]
-pub struct LaunchFeed(pub async_channel::Receiver<LaunchEvent>);
-
-impl Hash for LaunchFeed {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        "launch-feed".hash(state);
+/// The next batch of launch events: waits for the first event, lets the
+/// window fill, then drains whatever arrived. `None` once every sender is
+/// gone.
+pub async fn next_batch(
+    receiver: &async_channel::Receiver<LaunchEvent>,
+) -> Option<Vec<LaunchEvent>> {
+    let first = receiver.recv().await.ok()?;
+    async_io::Timer::after(BATCH_WINDOW).await;
+    let mut batch = vec![first];
+    while let Ok(event) = receiver.try_recv() {
+        batch.push(event);
     }
-}
-
-/// The launch events, batched: waits for the first event, lets the window
-/// fill, then drains whatever arrived.
-pub fn launch_batches(feed: &LaunchFeed) -> impl Stream<Item = Vec<LaunchEvent>> + use<> {
-    stream::unfold(feed.0.clone(), |receiver| async move {
-        let first = receiver.recv().await.ok()?;
-        async_io::Timer::after(BATCH_WINDOW).await;
-        let mut batch = vec![first];
-        while let Ok(event) = receiver.try_recv() {
-            batch.push(event);
-        }
-        Some((batch, receiver))
-    })
-}
-
-/// Spinner frames while a launch runs.
-pub fn spinner_ticks() -> impl Stream<Item = Instant> {
-    stream::unfold((), |()| async {
-        async_io::Timer::after(SPINNER_TICK).await;
-        Some((Instant::now(), ()))
-    })
-    .boxed()
+    Some(batch)
 }
 
 /// Stream one captured pipe (stdout or stderr) of a launched child to the
@@ -181,8 +155,7 @@ async fn prompt_for_exe(initial_dir: Option<PathBuf>) -> ashpd::Result<Option<Pa
 
 #[cfg(test)]
 mod tests {
-    use super::{LaunchEvent, LaunchFeed, exit_message, launch_batches};
-    use iced::futures::StreamExt as _;
+    use super::{LaunchEvent, exit_message, next_batch};
 
     #[test]
     fn exit_messages_match_the_status_strings() {
@@ -209,9 +182,7 @@ mod tests {
                 })
                 .unwrap();
         }
-        let feed = LaunchFeed(receiver);
-        let mut batches = Box::pin(launch_batches(&feed));
-        let batch = iced::futures::executor::block_on(batches.next()).unwrap();
+        let batch = async_io::block_on(next_batch(&receiver)).unwrap();
         assert_eq!(batch.len(), 5, "queued lines arrive as one batch");
     }
 }

@@ -36,19 +36,3 @@ pub fn test_game(name: &str, app_id: u32) -> Game {
         "/lib/steamapps/common/Proton - Experimental",
     )
 }
-
-/// A fresh [`State`](crate::app::State) for a main window that is never
-/// opened; nothing touches a real window or the Steam library.
-pub fn state() -> crate::app::State {
-    crate::app::State::with_main_window(iced::window::Id::unique())
-}
-
-/// A [`state`] showing `games` as rows, in the given order.
-pub fn state_with(games: &[Game]) -> crate::app::State {
-    let mut state = state();
-    state.set_rows(games.iter().map(crate::games::GameRow::from_game).collect());
-    // `update` mirrors the rows into the table columns; this fixture bypasses
-    // it, so mirror them here.
-    state.sync_table();
-    state
-}

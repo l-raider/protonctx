@@ -1,0 +1,280 @@
+// The games table: a rounded, clipped frame with a sortable header whose two
+// left columns resize, and rows painted per the Breeze rules (alternating
+// fills, a separator in the alternate shade under every row, the selection in
+// `primary` only while the window is focused, the selection at 0.3 on hover).
+
+import { Theme } from "theme.slint";
+import { Icon, ScrollArea } from "widgets.slint";
+
+export struct GameRowData {
+    name: string,
+    app-id: string,
+    tool: string,
+}
+
+// Height of a row, and of the header including its bottom rule.
+export global TableMetrics {
+    out property <length> row-height: 28px;
+    out property <length> header-height: 28px;
+    out property <length> min-column: 40px;
+    out property <length> min-compat: 80px;
+    out property <length> cell-padding: 8px;
+}
+
+component HeaderCell {
+    in property <string> title;
+    in property <bool> active;
+    in property <bool> descending;
+    in property <bool> last;
+    // gpui sized the last column 16 px short (the scrollbar rail) and centred
+    // its title in that width.
+    in property <length> reserve: 0px;
+    callback clicked;
+
+    Rectangle {
+        background: Theme.header;
+    }
+
+    HorizontalLayout {
+        padding-left: TableMetrics.cell-padding - 2px;
+        padding-right: TableMetrics.cell-padding - 2px + root.reserve;
+        Text {
+            horizontal-stretch: 1;
+            text: root.title;
+            font-weight: 500;
+            color: Theme.header-foreground;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        // Inactive columns keep an invisible slot of the same size so titles
+        // do not shift when the sorted column changes.
+        Rectangle {
+            width: Theme.font-size * 0.75 + 4px;
+            Icon {
+                size: Theme.font-size * 0.75;
+                source: root.descending
+                    ? @image-url("../assets/icons/sort-descending.svg")
+                    : @image-url("../assets/icons/sort-ascending.svg");
+                colorize: Theme.header-foreground;
+                opacity: root.active ? 1 : 0;
+            }
+        }
+    }
+
+    if !root.last: Rectangle {
+        x: parent.width - 1px;
+        width: 1px;
+        background: Theme.grid;
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A column-resize grip, 10 px wide and centred on a column's right edge.
+component ResizeGrip {
+    in-out property <length> column-width;
+    property <length> start;
+    width: 10px;
+    TouchArea {
+        mouse-cursor: col-resize;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.start = root.column-width;
+            }
+        }
+        moved => {
+            if self.pressed {
+                root.column-width = max(
+                    TableMetrics.min-column,
+                    root.start + self.mouse-x - self.pressed-x);
+            }
+        }
+    }
+}
+
+export component GamesTable {
+    in property <[GameRowData]> rows;
+    in property <int> selected: -1;
+    // Whether the main window is focused: the selected row is filled only
+    // then.
+    in property <bool> focused: true;
+    in property <int> sort-column: 0;
+    in property <bool> sort-descending: false;
+    in-out property <length> name-width: 260px;
+    in-out property <length> app-id-width: 110px;
+
+    callback header-clicked(int);
+    callback row-pressed(int);
+    // A right press on a row, in window coordinates.
+    callback row-context(int, length, length);
+
+    property <length> inner-width: self.width - 2px;
+    property <length> compat-width: max(TableMetrics.min-compat, root.inner-width - root.name-width - root.app-id-width);
+    property <length> total-width: root.name-width + root.app-id-width + root.compat-width;
+
+    frame := Rectangle {
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Theme.border;
+        background: Theme.list-background;
+        clip: true;
+
+        // Header, scrolled sideways with the body.
+        Rectangle {
+            x: 1px;
+            y: 1px;
+            width: root.inner-width;
+            height: TableMetrics.header-height;
+            clip: true;
+            background: Theme.header;
+
+            Rectangle {
+                x: body.offset-x;
+                width: root.total-width;
+                height: parent.height;
+
+                HeaderCell {
+                    x: 0;
+                    width: root.name-width;
+                    height: TableMetrics.header-height - 1px;
+                    title: "Game";
+                    active: root.sort-column == 0;
+                    descending: root.sort-descending;
+                    clicked => {
+                        root.header-clicked(0);
+                    }
+                }
+                HeaderCell {
+                    x: root.name-width;
+                    width: root.app-id-width;
+                    height: TableMetrics.header-height - 1px;
+                    title: "App ID";
+                    active: root.sort-column == 1;
+                    descending: root.sort-descending;
+                    clicked => {
+                        root.header-clicked(1);
+                    }
+                }
+                HeaderCell {
+                    x: root.name-width + root.app-id-width;
+                    width: root.compat-width;
+                    height: TableMetrics.header-height - 1px;
+                    title: "Compatibility Tool";
+                    last: true;
+                    reserve: Theme.scrollbar-width;
+                    active: root.sort-column == 2;
+                    descending: root.sort-descending;
+                    clicked => {
+                        root.header-clicked(2);
+                    }
+                }
+
+                ResizeGrip {
+                    x: root.name-width - self.width / 2;
+                    height: TableMetrics.header-height;
+                    column-width <=> root.name-width;
+                }
+                ResizeGrip {
+                    x: root.name-width + root.app-id-width - self.width / 2;
+                    height: TableMetrics.header-height;
+                    column-width <=> root.app-id-width;
+                }
+            }
+
+            // The frame rule under the header.
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.border;
+            }
+        }
+
+        body := ScrollArea {
+            x: 1px;
+            y: 1px + TableMetrics.header-height;
+            width: root.inner-width;
+            height: parent.height - 2px - TableMetrics.header-height;
+            content-width: root.total-width;
+            content-height: root.rows.length * TableMetrics.row-height;
+
+            for row[index] in root.rows: Rectangle {
+                y: index * TableMetrics.row-height;
+                width: root.total-width;
+                height: TableMetrics.row-height;
+
+                property <bool> odd: Math.mod(index, 2) == 1;
+                property <bool> filled: root.focused && root.selected == index;
+                property <color> text-color: self.filled ? Theme.primary-foreground : Theme.list-foreground;
+
+                background: self.filled
+                    ? (touch.has-hover ? Theme.selection-hover : Theme.primary)
+                    : self.odd
+                        ? (touch.has-hover ? Theme.hover-odd : Theme.alternate-row)
+                        : (touch.has-hover ? Theme.hover-even : Theme.list-background);
+
+                // Breeze separates rows with the alternate shade, under every
+                // row (the selected one included).
+                Rectangle {
+                    y: parent.height - 1px;
+                    height: 1px;
+                    background: Theme.alternate-row;
+                }
+
+                // gpui centres row text 1 px lower than a plain centre.
+                Text {
+                    x: TableMetrics.cell-padding;
+                    y: 2px;
+                    width: root.name-width - 2 * TableMetrics.cell-padding;
+                    height: parent.height - 3px;
+                    text: row.name;
+                    color: parent.text-color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    x: root.name-width + TableMetrics.cell-padding;
+                    y: 2px;
+                    width: root.app-id-width - 2 * TableMetrics.cell-padding;
+                    height: parent.height - 3px;
+                    text: row.app-id;
+                    color: parent.text-color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                Text {
+                    x: root.name-width + root.app-id-width + TableMetrics.cell-padding;
+                    y: 2px;
+                    width: root.compat-width - 2 * TableMetrics.cell-padding;
+                    height: parent.height - 3px;
+                    text: row.tool;
+                    color: parent.text-color;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                touch := TouchArea {
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down {
+                            if event.button == PointerEventButton.left {
+                                root.row-pressed(index);
+                            } else if event.button == PointerEventButton.right {
+                                // Right-clicking selects the row so the
+                                // context menu acts on it.
+                                root.row-pressed(index);
+                                root.row-context(
+                                    index,
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
