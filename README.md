@@ -26,8 +26,12 @@ is required to build it.
 Requirements:
 
 - Rust 2024 edition toolchain (1.98+).
-- [mold](https://github.com/rui314/mold): `.cargo/config.toml` links with it for fast
-  builds (`dnf install mold` / `apt install mold`; or override with `RUSTFLAGS=""`).
+- [lld](https://lld.llvm.org/): `.cargo/config.toml` links with it, with identical code
+  folding (`--icf=all`) for a smaller binary (`dnf install lld` / `apt install lld`).
+  The same config builds for `x86-64-v3`, so local builds (including `build.sh` and
+  `build-rpm.sh`) need an AVX2-capable CPU (Intel Haswell / AMD Excavator or newer).
+  `RUSTFLAGS=""` overrides all of it; the deb and AppImage container builds do that, and
+  the Flatpak build replaces the config, so those packages run on any x86-64 CPU.
 - A C toolchain for linking (`build-essential` / `gcc`), `pkg-config` and the fontconfig
   headers (`libfontconfig-dev` / `fontconfig-devel`), which Slint's font lookup links.
 - At runtime the X11 libraries (Xlib, xcb, Xcursor, Xrandr, Xi) and xkbcommon are loaded
