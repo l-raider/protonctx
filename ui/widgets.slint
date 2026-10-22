@@ -508,8 +508,7 @@ export component CheckBox {
     label := Text {
         accessible-role: none;
         x: box.width + Theme.rem(2);
-        // gpui's checkbox label is text_sm (0.875 rem).
-        font-size: Theme.font-size * 0.875;
+        // The window's body size, as the dialogs' other text uses.
         text: root.text;
         vertical-alignment: center;
         color: Theme.foreground;
