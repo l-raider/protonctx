@@ -12,24 +12,26 @@ use super::paths;
 
 /// Resolve the install directory of a compatibility tool by its internal name.
 ///
-/// Built-in tools (e.g. `"proton_experimental"`) live under `<steam_root>/steamapps/common/`
-/// with the *display* name as directory name (e.g. `Proton - Experimental`); the internal
-/// name is the lowercased, underscore-joined display name without spaces ("Proton
-/// Experimental" → `proton_experimental`). The appmanifests carry this mapping
-/// (`name` ↔ `installdir`), so we use them — see [`builtin_tool_dirs`]. Custom tools
-/// (e.g. `"GE-Proton10-34"`) live under `<steam_root>/compatibilitytools.d/` and use the
-/// internal name as their directory name, so the path check succeeds immediately.
+/// Built-in tools (e.g. `"proton_experimental"`) are Steam apps like any other: they
+/// install into a library's `steamapps/common/` with the *display* name as directory
+/// name (e.g. `Proton - Experimental`), in whichever library is the default, which is
+/// not always the Steam root. The internal name is the lowercased, underscore-joined
+/// display name without spaces ("Proton Experimental" → `proton_experimental`). The
+/// appmanifests carry this mapping (`name` ↔ `installdir`), so we use them — see
+/// [`builtin_tool_dirs`]. Custom tools (e.g. `"GE-Proton10-34"`) live under
+/// `<steam_root>/compatibilitytools.d/` and use the internal name as their directory
+/// name, so the path check succeeds immediately.
 ///
 /// Returns `None` when the tool is not installed or not a Proton-type tool (e.g. a
 /// non-Proton compatibility layer like Boxtron), rather than an error — the caller falls
 /// back to the prefix's recorded tool then.
 ///
 /// `builtins` is the prebuilt [`builtin_tool_dirs`] map: callers resolving several
-/// tools for the same `steam_root` (e.g. [`super::discover_games`]) build it once and
-/// reuse it, avoiding a full re-read and VDF-parse of every appmanifest per call.
+/// tools in one scan (e.g. [`super::discover_games`]) build it once and reuse it,
+/// avoiding a full re-read and VDF-parse of every appmanifest per call.
 pub fn proton_dir_for_tool(
     steam_root: &Path,
-    builtins: &HashMap<String, String>,
+    builtins: &HashMap<String, PathBuf>,
     tool: &str,
 ) -> Option<PathBuf> {
     if tool.is_empty() {
@@ -41,51 +43,60 @@ pub fn proton_dir_for_tool(
         return Some(custom);
     }
 
-    resolve_builtin_dir(steam_root, builtins, tool)
+    resolve_builtin_dir(builtins, tool)
 }
 
-/// Map of internal compat-tool name → install directory (under `steamapps/common/`)
-/// for every installed built-in Proton tool, built from the `appmanifest_*.acf` files.
+/// Map of internal compat-tool name → full install directory
+/// (`<library>/steamapps/common/<installdir>`) for every built-in Proton tool with an
+/// appmanifest in any of `libraries`. When two libraries list the same tool, the
+/// first library wins.
 ///
 /// Reading and VDF-parsing every appmanifest is not cheap, so callers that resolve
 /// several tools in one pass (e.g. [`super::discover_games`]) should build this map
 /// once and reuse it via [`resolve_builtin_dir`] rather than calling
 /// [`proton_dir_for_tool`] per tool — which would re-read the whole manifest
 /// directory on every call (O(games × manifests)).
-pub fn builtin_tool_dirs(steam_root: &Path) -> HashMap<String, String> {
-    let steamapps = paths::steamapps_dir(steam_root);
-
-    std::fs::read_dir(&steamapps)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            if !is_appmanifest(&entry.path()) {
-                return None;
-            }
-            parse_builtin_appmanifest(&entry.path())
-        })
-        .collect()
+pub fn builtin_tool_dirs(libraries: &[PathBuf]) -> HashMap<String, PathBuf> {
+    let mut map = HashMap::new();
+    for library in libraries {
+        let manifests = std::fs::read_dir(paths::steamapps_dir(library))
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                if !is_appmanifest(&path) {
+                    return None;
+                }
+                parse_builtin_appmanifest(&path)
+            });
+        for (internal, install_dir) in manifests {
+            map.entry(internal)
+                .or_insert_with(|| paths::app_common_dir(library, &install_dir));
+        }
+    }
+    map
 }
 
 /// Resolve a built-in tool's install directory from a prebuilt [`builtin_tool_dirs`]
-/// map, verifying the directory actually exists under `steamapps/common/`.
+/// map, verifying the directory actually exists.
 pub fn resolve_builtin_dir(
-    steam_root: &Path,
-    builtins: &HashMap<String, String>,
+    builtins: &HashMap<String, PathBuf>,
     internal_name: &str,
 ) -> Option<PathBuf> {
     if !internal_name.starts_with("proton_") {
         return None;
     }
 
-    let dir = paths::app_common_dir(steam_root, builtins.get(internal_name)?);
-
-    dir.is_dir().then_some(dir)
+    builtins
+        .get(internal_name)
+        .filter(|dir| dir.is_dir())
+        .cloned()
 }
 
 /// Parse a built-in tool's `appmanifest_<appid>.acf` into its internal name (`name`) and
-/// install dir (`installdir`). Runtimes (e.g. `Steam Linux Runtime`) are filtered out here.
+/// install dir (`installdir`). Runtimes (e.g. `Steam Linux Runtime`) are filtered out
+/// here, and so is a manifest without an `installdir`, which would otherwise resolve
+/// to `steamapps/common/` itself.
 fn parse_builtin_appmanifest(path: &Path) -> Option<(String, String)> {
     let state = read_app_state(path)?;
 
@@ -102,7 +113,8 @@ fn parse_builtin_appmanifest(path: &Path) -> Option<(String, String)> {
         .join("_")
         .to_lowercase();
 
-    Some((internal, state.install_dir.unwrap_or_default()))
+    let install_dir = state.install_dir.filter(|dir| !dir.is_empty())?;
+    Some((internal, install_dir))
 }
 
 /// Load the compatibility tool mapping from Steam's `config.vdf`.
@@ -258,10 +270,10 @@ mod tests {
         .unwrap();
     }
 
-    /// Create `steam_root/steamapps/common/<dir>` for a built-in tool, matching the real
+    /// Create `library/steamapps/common/<dir>` for a built-in tool, matching the real
     /// layout where appmanifests sit in `steamapps/` and install dirs in `steamapps/common/`.
-    fn mk_common(steam_root: &std::path::Path, subdir: &str) -> std::path::PathBuf {
-        let common = steam_root.join("steamapps").join("common");
+    fn mk_common(library: &std::path::Path, subdir: &str) -> std::path::PathBuf {
+        let common = library.join("steamapps").join("common");
         let dir = common.join(subdir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -273,7 +285,11 @@ mod tests {
         let ge = root.join("compatibilitytools.d").join("GE-Proton10-34");
         std::fs::create_dir_all(&ge).unwrap();
 
-        let resolved = proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "GE-Proton10-34");
+        let resolved = proton_dir_for_tool(
+            &root,
+            &builtin_tool_dirs(std::slice::from_ref(&root)),
+            "GE-Proton10-34",
+        );
         assert_eq!(resolved, Some(ge));
 
         std::fs::remove_dir_all(&root).ok();
@@ -294,7 +310,11 @@ mod tests {
         );
         let pe = mk_common(&root, "Proton - Experimental");
 
-        let resolved = proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "proton_experimental");
+        let resolved = proton_dir_for_tool(
+            &root,
+            &builtin_tool_dirs(std::slice::from_ref(&root)),
+            "proton_experimental",
+        );
         assert_eq!(resolved, Some(pe));
 
         std::fs::remove_dir_all(&root).ok();
@@ -315,11 +335,19 @@ mod tests {
 
         // Runtimes must never be resolved as Proton tools.
         assert_eq!(
-            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "steam_linux_runtime_4"),
+            proton_dir_for_tool(
+                &root,
+                &builtin_tool_dirs(std::slice::from_ref(&root)),
+                "steam_linux_runtime_4"
+            ),
             None
         );
         assert_eq!(
-            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "proton_experimental"),
+            proton_dir_for_tool(
+                &root,
+                &builtin_tool_dirs(std::slice::from_ref(&root)),
+                "proton_experimental"
+            ),
             None
         );
 
@@ -332,11 +360,19 @@ mod tests {
         std::fs::create_dir_all(&root).ok();
 
         assert_eq!(
-            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "GE-Proton10-34"),
+            proton_dir_for_tool(
+                &root,
+                &builtin_tool_dirs(std::slice::from_ref(&root)),
+                "GE-Proton10-34"
+            ),
             None
         );
         assert_eq!(
-            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "proton_experimental"),
+            proton_dir_for_tool(
+                &root,
+                &builtin_tool_dirs(std::slice::from_ref(&root)),
+                "proton_experimental"
+            ),
             None
         );
 
@@ -349,11 +385,15 @@ mod tests {
         std::fs::create_dir_all(&root).ok();
 
         assert_eq!(
-            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), ""),
+            proton_dir_for_tool(&root, &builtin_tool_dirs(std::slice::from_ref(&root)), ""),
             None
         );
         assert_eq!(
-            proton_dir_for_tool(&root, &builtin_tool_dirs(&root), "default"),
+            proton_dir_for_tool(
+                &root,
+                &builtin_tool_dirs(std::slice::from_ref(&root)),
+                "default"
+            ),
             None
         );
 
@@ -381,14 +421,15 @@ mod tests {
             4183110,
         );
 
-        let map = builtin_tool_dirs(&root);
+        let map = builtin_tool_dirs(std::slice::from_ref(&root));
+        let common = root.join("steamapps").join("common");
         assert_eq!(
-            map.get("proton_experimental").map(String::as_str),
-            Some("Proton - Experimental")
+            map.get("proton_experimental"),
+            Some(&common.join("Proton - Experimental"))
         );
         assert_eq!(
-            map.get("proton_hotfix").map(String::as_str),
-            Some("Proton - Hotfix")
+            map.get("proton_hotfix"),
+            Some(&common.join("Proton - Hotfix"))
         );
         assert!(!map.contains_key("steam_linux_runtime_4"));
 
@@ -412,7 +453,7 @@ mod tests {
         let pe = mk_common(&root, "Proton - Experimental");
         let ph = mk_common(&root, "Proton - Hotfix");
 
-        let map = builtin_tool_dirs(&root);
+        let map = builtin_tool_dirs(std::slice::from_ref(&root));
         // Reuse the same map for several lookups (the discovery-loop pattern).
         assert_eq!(
             proton_dir_for_tool(&root, &map, "proton_experimental"),
@@ -428,6 +469,69 @@ mod tests {
     }
 
     #[test]
+    fn resolves_builtin_installed_in_a_secondary_library() {
+        // Steam installs Proton into the default library, which on a Steam Deck
+        // with an SD card is not the root: the appmanifest and the install dir
+        // both live in the second library.
+        let base = crate::test_support::temp_dir("builtin_secondary");
+        let root = base.join("root");
+        let card = base.join("card");
+        std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        write_builtin_appmanifest(
+            &card.join("steamapps"),
+            "Proton Experimental",
+            "Proton - Experimental",
+            1493710,
+        );
+        let pe = mk_common(&card, "Proton - Experimental");
+
+        let map = builtin_tool_dirs(&[root.clone(), card.clone()]);
+        assert_eq!(
+            proton_dir_for_tool(&root, &map, "proton_experimental"),
+            Some(pe)
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn first_library_wins_for_a_duplicate_tool() {
+        let base = crate::test_support::temp_dir("builtin_duplicate");
+        let first = base.join("first");
+        let second = base.join("second");
+        for library in [&first, &second] {
+            write_builtin_appmanifest(
+                &library.join("steamapps"),
+                "Proton Hotfix",
+                "Proton - Hotfix",
+                961940,
+            );
+        }
+
+        let map = builtin_tool_dirs(&[first.clone(), second]);
+        assert_eq!(
+            map.get("proton_hotfix"),
+            Some(&paths::app_common_dir(&first, "Proton - Hotfix"))
+        );
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn builtin_without_installdir_is_skipped() {
+        // An empty `installdir` would resolve to `steamapps/common/` itself.
+        let root = crate::test_support::temp_dir("builtin_no_installdir");
+        write_builtin_appmanifest(&root.join("steamapps"), "Proton Hotfix", "", 961940);
+        std::fs::create_dir_all(root.join("steamapps").join("common")).unwrap();
+
+        let map = builtin_tool_dirs(std::slice::from_ref(&root));
+        assert!(!map.contains_key("proton_hotfix"));
+        assert_eq!(proton_dir_for_tool(&root, &map, "proton_hotfix"), None);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn cached_lookup_still_resolves_custom_tools() {
         // Custom tools live under compatibilitytools.d and must resolve from the
         // cached path too (the map only covers built-ins).
@@ -435,7 +539,7 @@ mod tests {
         let ge = root.join("compatibilitytools.d").join("GE-Proton10-34");
         std::fs::create_dir_all(&ge).unwrap();
 
-        let map = builtin_tool_dirs(&root);
+        let map = builtin_tool_dirs(std::slice::from_ref(&root));
         assert_eq!(proton_dir_for_tool(&root, &map, "GE-Proton10-34"), Some(ge));
 
         std::fs::remove_dir_all(&root).ok();
@@ -453,7 +557,7 @@ mod tests {
         );
         mk_common(&root, "SteamLinuxRuntime_4");
 
-        let map = builtin_tool_dirs(&root);
+        let map = builtin_tool_dirs(std::slice::from_ref(&root));
         assert_eq!(
             proton_dir_for_tool(&root, &map, "steam_linux_runtime_4"),
             None

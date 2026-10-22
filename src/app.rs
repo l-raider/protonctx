@@ -309,10 +309,17 @@ impl App {
     /// Pick a Windows executable through the XDG desktop portal and run it in
     /// the selected game's prefix. The portal dialog is not modal, so only
     /// one request may be in flight.
+    ///
+    /// The game is captured now, not when the chooser returns: the table
+    /// stays usable meanwhile, so the selection can change, or a refresh can
+    /// clear it, before a file is picked.
     fn browse(&mut self) {
         if self.state.browsing {
             return;
         }
+        let Some(game) = self.require_game() else {
+            return;
+        };
         self.state.browsing = true;
         let initial_dir = if self.state.remember_last_dir {
             crate::config::load_last_dir()
@@ -322,11 +329,11 @@ impl App {
         let me = self.me.clone();
         let _ = slint::spawn_local(async move {
             let outcome = background::pick_executable(initial_dir).await;
-            with_app(&me, |app| app.browse_finished(outcome));
+            with_app(&me, |app| app.browse_finished(outcome, &game));
         });
     }
 
-    fn browse_finished(&mut self, outcome: BrowseOutcome) {
+    fn browse_finished(&mut self, outcome: BrowseOutcome, game: &crate::models::Game) {
         self.state.browsing = false;
         match outcome {
             BrowseOutcome::Picked(path) => {
@@ -336,7 +343,7 @@ impl App {
                 {
                     eprintln!("protonctx: failed to save last directory: {error}");
                 }
-                self.launch_browsed(path);
+                self.launch_browsed(&path, game);
             }
             BrowseOutcome::Nothing => {}
             BrowseOutcome::Failed(error) => {
@@ -345,13 +352,13 @@ impl App {
         }
     }
 
-    fn launch_browsed(&mut self, path: PathBuf) {
-        let Some(game) = self.require_game() else {
-            return;
-        };
-        let display = path.to_string_lossy().into_owned();
-        match crate::launcher::proton::run_in_prefix(&game, &[&display]) {
-            Ok(process) => self.start_launch(process, format!("Running {display}...")),
+    /// Run a picked executable in `game`'s prefix.
+    fn launch_browsed(&mut self, path: &Path, game: &crate::models::Game) {
+        match crate::launcher::run_executable(game, path) {
+            Ok(process) => self.start_launch(
+                process,
+                format!("Running {} in {}...", path.display(), game.name),
+            ),
             Err(error) => self.show_error(format!("Failed to launch: {error}")),
         }
     }

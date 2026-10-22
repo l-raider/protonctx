@@ -128,8 +128,15 @@ pub fn discover_games() -> Result<Discovery, SteamError> {
     let mut games = Vec::new();
     // Built once for the whole scan: the internal-name → install-dir map for
     // built-in Proton tools. Resolving it per game would re-read and VDF-parse
-    // every appmanifest on each iteration (O(games × manifests)).
-    let builtin_tools = compat::builtin_tool_dirs(&steam_root);
+    // every appmanifest on each iteration (O(games × manifests)). Proton installs
+    // into the default library, which is not always the root, so every library
+    // is searched; the root too, in case `libraryfolders.vdf` leaves it out.
+    let mut tool_libraries = libraries.clone();
+    if !tool_libraries.contains(&steam_root) {
+        tool_libraries.push(steam_root.clone());
+    }
+    let builtin_tools = compat::builtin_tool_dirs(&tool_libraries);
+    let steam_root_text = steam_root.to_string_lossy().into_owned();
     for library in &libraries {
         let apps = match manifest::installed_apps(library) {
             Ok(apps) => apps,
@@ -191,6 +198,7 @@ pub fn discover_games() -> Result<Discovery, SteamError> {
                 app_id: app.app_id,
                 compat_tool,
                 library_path: library.to_string_lossy().into_owned(),
+                steam_root: steam_root_text.clone(),
                 proton_dir,
             });
         }

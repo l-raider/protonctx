@@ -137,7 +137,7 @@ fn desktop_entry_installed(id: &str) -> bool {
 /// # Threading
 ///
 /// This performs a **blocking** subprocess call (`flatpak-spawn --host flatpak
-/// document-info`) and is invoked from [`crate::launcher::proton::run_in_prefix`],
+/// document-info`) and is invoked from [`crate::launcher::run_executable`],
 /// which runs on the GUI thread. Non-document paths return early without spawning
 /// anything, so only a launch whose argument is a document-portal alias pays the
 /// cost; that case can stall the UI for the duration of the host round-trip, and

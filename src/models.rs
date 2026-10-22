@@ -2,7 +2,7 @@
 //!
 //! `Game` is the display + launch record shown in the Qt games table and passed to the
 //! Proton launcher. It is kept deliberately small: the UI only needs display fields plus
-//! the `proton_dir` used to launch executables.
+//! the paths used to launch executables (`library_path`, `steam_root`, `proton_dir`).
 
 /// A single installed Steam game (or Steam "app") that can be run under Proton.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +18,11 @@ pub struct Game {
     /// Absolute path to the Steam library this game is installed in, e.g.
     /// `"/home/username/.local/share/Steam"`.
     pub library_path: String,
+    /// Absolute path to the Steam client install the game was discovered through (the
+    /// Steam root), exported to Proton as `STEAM_COMPAT_CLIENT_INSTALL_PATH`. This is
+    /// not `library_path`: a game on a secondary library still runs with the root's
+    /// client files.
+    pub steam_root: String,
     /// Absolute path to the Proton compatibility tool directory that this game runs with,
     /// e.g. `"/home/username/.local/share/Steam/steamapps/common/Proton - Experimental"`.
     /// Empty when it could not be resolved.

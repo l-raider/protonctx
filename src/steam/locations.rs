@@ -6,16 +6,12 @@ use crate::xdg;
 
 use super::paths;
 
-/// The default Steam root relative to `$HOME`. Shared with the launcher's
-/// home-based fallback so the two cannot drift.
-pub const DEFAULT_ROOT: &str = ".local/share/Steam";
-
 /// Candidate Steam roots, in priority order. The first that contains the data files we
 /// need wins. These mirror the locations Steam uses on Linux; `~/.steam/root`,
 /// `~/.steam/steam` and `~/.steam/debian-installation` are symlinks that all resolve to
 /// `~/.local/share/Steam` on a normal installation, but we check them all to be safe.
 const CANDIDATES: [&str; 4] = [
-    DEFAULT_ROOT,
+    ".local/share/Steam",
     ".steam/root",
     ".steam/steam",
     ".steam/debian-installation",

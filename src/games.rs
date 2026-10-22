@@ -26,6 +26,7 @@ pub struct GameRow {
     /// The display value of the compatibility tool (see [`display_compat_tool`]).
     pub compat_tool: String,
     pub library_path: String,
+    pub steam_root: String,
     pub proton_dir: String,
 }
 
@@ -39,18 +40,20 @@ impl GameRow {
             app_id: game.app_id,
             compat_tool: display_compat_tool(game),
             library_path: game.library_path.clone(),
+            steam_root: game.steam_root.clone(),
             proton_dir: game.proton_dir.clone(),
         }
     }
 
     /// The row as a backend [`Game`]. The launcher only reads `name`,
-    /// `app_id`, `library_path`, and `proton_dir`.
+    /// `app_id`, `library_path`, `steam_root`, and `proton_dir`.
     pub fn to_game(&self) -> Game {
         Game {
             name: self.name.clone(),
             app_id: self.app_id,
             compat_tool: self.compat_tool.clone(),
             library_path: self.library_path.clone(),
+            steam_root: self.steam_root.clone(),
             proton_dir: self.proton_dir.clone(),
         }
     }
@@ -174,7 +177,9 @@ mod tests {
         assert_eq!(row.app_id, 274190);
         assert_eq!(row.compat_tool, "Proton - Experimental (default)");
         assert_eq!(row.library_path, source.library_path);
+        assert_eq!(row.steam_root, source.steam_root);
         assert_eq!(row.proton_dir, source.proton_dir);
+        assert_eq!(row.to_game().steam_root, source.steam_root);
     }
 
     #[test]
