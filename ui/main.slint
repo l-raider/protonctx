@@ -18,7 +18,8 @@ export component MainWindow inherits Window {
     default-font-family: Theme.font-family;
     default-font-size: Theme.font-size;
     default-font-weight: Theme.font-weight;
-    forward-focus: keys;
+    // The games table has the keyboard first, as the first view in Qt does.
+    forward-focus: table;
 
     // ---- State pushed from Rust ----
     in property <[GameRowData]> rows;
@@ -92,7 +93,11 @@ export component MainWindow inherits Window {
     // keep their minimum heights (160 / 54 px).
     property <float> split-ratio: 420 / 560;
 
+    // The window's shortcuts, seen before whatever has the focus. Never
+    // focused itself, so Tab and clicks move between the real controls.
     keys := FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
         capture-key-pressed(event) => {
             if root.dialog-open {
                 return accept;

@@ -2,6 +2,8 @@
 // left columns resize, and rows painted per the Breeze rules (alternating
 // fills, a separator in the alternate shade under every row, the selection in
 // `primary` only while the window is focused, the selection at 0.3 on hover).
+// It takes the keyboard focus from Tab or a row click and moves the selection
+// with the arrow keys, Page Up/Down, Home and End, as Qt's views do.
 
 import { Theme } from "theme.slint";
 import { Icon, ScrollArea } from "widgets.slint";
@@ -120,6 +122,7 @@ export component GamesTable {
 
     accessible-role: table;
     accessible-label: "Games";
+    forward-focus: keys;
 
     // The keyboard route to the context menu (Menu key, Shift+F10): scroll
     // the selected row into view and open the menu under it.
@@ -127,18 +130,64 @@ export component GamesTable {
         if root.selected < 0 || root.selected >= root.rows.length {
             return;
         }
-        // Rows show between the pinned header and the bottom of the view.
-        let top = root.selected * TableMetrics.row-height;
+        root.scroll-into-view(root.selected);
+        root.row-context(
+            root.selected,
+            self.absolute-position.x + 1px + 4 * TableMetrics.cell-padding,
+            self.absolute-position.y + 1px + TableMetrics.header-height
+                + (root.selected + 1) * TableMetrics.row-height + body.offset-y);
+    }
+
+    // Scroll the least needed to show `row` whole, between the pinned header
+    // and the bottom of the view.
+    function scroll-into-view(row: int) {
+        let top = row * TableMetrics.row-height;
         if top + body.offset-y < 0 {
             body.offset-y = -top;
         } else if TableMetrics.header-height + top + TableMetrics.row-height + body.offset-y > body.visible-height {
             body.offset-y = body.visible-height - TableMetrics.header-height - top - TableMetrics.row-height;
         }
-        root.row-context(
-            root.selected,
-            self.absolute-position.x + 1px + 4 * TableMetrics.cell-padding,
-            self.absolute-position.y + 1px + TableMetrics.header-height
-                + top + TableMetrics.row-height + body.offset-y);
+    }
+
+    // Select `row`, clamped to the table, and bring it into view.
+    function select-row(row: int) {
+        if root.rows.length == 0 {
+            return;
+        }
+        let target = clamp(row, 0, root.rows.length - 1);
+        if target != root.selected {
+            root.row-pressed(target);
+        }
+        root.scroll-into-view(target);
+    }
+
+    // Whole rows that fit under the header: one Page Up/Down step.
+    property <int> page-rows: max(1, floor((body.visible-height - TableMetrics.header-height) / TableMetrics.row-height));
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.modifiers.alt || event.modifiers.meta {
+                return reject;
+            }
+            // With nothing selected, Down and Page Down start at the first
+            // row (Up and Page Up clamp to it).
+            if event.text == Key.UpArrow {
+                root.select-row(root.selected - 1);
+            } else if event.text == Key.DownArrow {
+                root.select-row(root.selected < 0 ? 0 : root.selected + 1);
+            } else if event.text == Key.PageUp {
+                root.select-row(root.selected - root.page-rows);
+            } else if event.text == Key.PageDown {
+                root.select-row(root.selected < 0 ? 0 : root.selected + root.page-rows);
+            } else if event.text == Key.Home {
+                root.select-row(0);
+            } else if event.text == Key.End {
+                root.select-row(root.rows.length - 1);
+            } else {
+                return reject;
+            }
+            accept
+        }
     }
 
     property <length> inner-width: self.width - 2px;
@@ -232,6 +281,8 @@ export component GamesTable {
                 touch := TouchArea {
                     pointer-event(event) => {
                         if event.kind == PointerEventKind.down {
+                            // The row takes the press, so focus the table here.
+                            keys.focus();
                             if event.button == PointerEventButton.left {
                                 root.row-pressed(index);
                             } else if event.button == PointerEventButton.right {

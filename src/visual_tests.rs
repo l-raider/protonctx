@@ -219,6 +219,25 @@ fn visual_states() {
         button: PointerEventButton::Left,
     });
     save(&adapter, 760, 520, "slint-log-drag-autoscroll");
+
+    // End selects the last game and scrolls the table down to it; Page Up
+    // then moves a page up, scrolling just enough to show it.
+    let weak = main.as_weak();
+    main.on_row_pressed(move |row| {
+        if let Some(main) = weak.upgrade() {
+            main.set_selected(row);
+        }
+    });
+    click(
+        window,
+        200.0,
+        33.0 + 28.0 + 28.0 * 1.5,
+        PointerEventButton::Left,
+    );
+    key(window, slint::platform::Key::End);
+    save(&adapter, 760, 520, "slint-table-keyboard-end");
+    key(window, slint::platform::Key::PageUp);
+    save(&adapter, 760, 520, "slint-table-keyboard-page-up");
     drop(main);
 
     let dialog = AboutDialog::new().unwrap();
@@ -316,6 +335,27 @@ fn main_window_routes_input_to_its_callbacks() {
     key(window, slint::platform::Key::F5);
     assert_eq!(calls.take(), ["refresh"]);
 
+    // The table has the keyboard from the start. The arrows, Page Up/Down,
+    // Home and End move the selection; the test plays the Rust side, which
+    // pushes the new selection back.
+    let nav = |selected: i32, keys: &[slint::platform::Key]| {
+        main.set_selected(selected);
+        for k in keys {
+            key(window, *k);
+        }
+    };
+    use slint::platform::Key::{DownArrow, End, Home, PageDown, PageUp, UpArrow};
+    nav(-1, &[DownArrow]);
+    nav(2, &[DownArrow, UpArrow]);
+    assert_eq!(calls.take(), ["row 0", "row 3", "row 1"]);
+    // The ends clamp; a key that would not move the selection reports none.
+    nav(5, &[DownArrow, End, PageDown]);
+    nav(0, &[UpArrow, Home, PageUp]);
+    assert!(calls.take().is_empty());
+    nav(0, &[PageDown, End]);
+    nav(5, &[PageUp, Home]);
+    assert_eq!(calls.take(), ["row 5", "row 5", "row 0", "row 0"]);
+
     // Header clicks pick the column under the pointer.
     click(window, 319.0, 48.0, PointerEventButton::Left);
     assert_eq!(calls.take(), ["header 1"]);
@@ -352,6 +392,10 @@ fn main_window_routes_input_to_its_callbacks() {
     click(window, 60.0, registry_editor, PointerEventButton::Left);
     assert_eq!(calls.take(), ["launch regedit"]);
 
+    // The table keeps the keyboard after its context menu closes.
+    nav(3, &[DownArrow]);
+    assert_eq!(calls.take(), ["row 4"]);
+
     // The hamburger menu: Settings, then Clear logs after reopening.
     click(window, 16.0, 16.0, PointerEventButton::Left);
     click(window, 40.0, 35.0 + 4.0 + 14.0, PointerEventButton::Left);
@@ -378,9 +422,19 @@ fn main_window_routes_input_to_its_callbacks() {
     );
     assert_eq!(calls.take(), ["clear"]);
 
+    // A click in the log gives it the keyboard (its arrows move the text
+    // cursor); a row click hands it back to the table.
+    click(window, 300.0, 400.0, PointerEventButton::Left);
+    nav(1, &[DownArrow]);
+    assert!(calls.take().is_empty());
+    click(window, 200.0, row_y(1.0), PointerEventButton::Left);
+    nav(1, &[DownArrow]);
+    assert_eq!(calls.take(), ["row 1", "row 2"]);
+
     // While a dialog is open the main window ignores input.
     main.set_dialog_open(true);
     key(window, slint::platform::Key::F5);
+    key(window, DownArrow);
     click(window, 200.0, row_y(1.0), PointerEventButton::Left);
     click(window, 16.0, 16.0, PointerEventButton::Left);
     assert!(calls.take().is_empty());
