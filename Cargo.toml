@@ -43,9 +43,11 @@ slint-build = "1.18"
 # PNG output of the headless visual snapshots (src/visual_tests.rs).
 png = "0.18"
 
+# opt-level 2 had the lowest CPU under interaction of 1/2/3/s/z, at ~2 MB
+# more memory and ~3 MB more binary than "s" (docs/benchmarks/opt-level.md).
 [profile.publicrelease]
 inherits = "release"
-opt-level = "s"
+opt-level = 2
 lto = "fat"
 strip = true
 codegen-units = 1
