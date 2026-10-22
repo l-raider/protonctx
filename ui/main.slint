@@ -18,6 +18,7 @@ export component MainWindow inherits Window {
     default-font-family: Theme.font-family;
     default-font-size: Theme.font-size;
     default-font-weight: Theme.font-weight;
+    forward-focus: keys;
 
     // ---- State pushed from Rust ----
     in property <[GameRowData]> rows;
@@ -100,6 +101,10 @@ export component MainWindow inherits Window {
                 root.refresh();
                 return accept;
             }
+            if event.text == Key.Menu || (event.modifiers.shift && event.text == Key.F10) {
+                table.open-context-for-selected();
+                return accept;
+            }
             if event.modifiers.control && (event.text == "c" || event.text == "C") {
                 root.log-copy();
                 return accept;
@@ -129,6 +134,7 @@ export component MainWindow inherits Window {
                     alignment: start;
                     hamburger := ToolbarButton {
                         icon: @image-url("../assets/icons/menu.svg");
+                        name: "Main menu";
                         active: main-menu.is-open;
                         clicked => {
                             main-menu.show();
@@ -164,7 +170,7 @@ export component MainWindow inherits Window {
                     spacing: Theme.rem(1);
                     padding-bottom: Theme.rem(1);
 
-                    GamesTable {
+                    table := GamesTable {
                         vertical-stretch: 1;
                         rows: root.rows;
                         selected: root.selected;
@@ -440,8 +446,4 @@ export component MainWindow inherits Window {
 
     // While a dialog is open, an invisible layer swallows the mouse.
     if root.dialog-open: TouchArea { }
-
-    init => {
-        keys.focus();
-    }
 }

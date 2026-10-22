@@ -7,10 +7,6 @@ license = "GPL-3.0-only"
 description = "Launch executables inside a Steam game's Proton context"
 repository = "https://github.com/l-raider/protonctx"
 
-# Opt into the workspace lints (deny unsafe + clippy denies below).
-[lints]
-workspace = true
-
 [dependencies]
 # Slint on X11 (XWayland on Plasma) with the CPU software renderer (no GPU
 # driver needed). X11 so dialogs can be transient children of the main window
@@ -23,7 +19,8 @@ slint = { version = "1.18", default-features = false, features = [
     "accessibility",
     "unstable-winit-030",
 ] }
-native-theme = { version = "0.6.1", default-features = false }
+# The KDE reader (kdeglobals + portal) behind `SystemTheme::from_system`.
+native-theme = { version = "0.6.1", default-features = false, features = ["linux"] }
 # Dialog hints (WM_TRANSIENT_FOR, dialog type) on X11; pure Rust connection.
 x11rb = "0.13"
 # Slint has no public clipboard API; its winit backend uses arboard too.
@@ -38,12 +35,9 @@ steam-vdf-parser = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# The KDE reader (kdeglobals + portal) behind `SystemTheme::from_system`.
-[target.'cfg(target_os = "linux")'.dependencies]
-native-theme = { version = "0.6.1", default-features = false, features = ["linux"] }
-
 [build-dependencies]
-slint-build = "=1.18.1"
+# Must match `slint`: the generated code checks the runtime's version.
+slint-build = "1.18"
 
 [dev-dependencies]
 # PNG output of the headless visual snapshots (src/visual_tests.rs).
@@ -55,8 +49,6 @@ opt-level = "s"
 lto = "fat"
 strip = true
 codegen-units = 1
-debug = false
-incremental = false
 panic = "abort"
 
 [profile.profiling]
@@ -64,12 +56,12 @@ inherits = "release"
 debug = 1
 strip = "none"
 
-[workspace.lints.rust]
+[lints.rust]
 # `deny` rather than `forbid`: Slint's generated UI code allows `unsafe_code`
 # locally for its static vtables (see src/main.rs).
 unsafe_code = "deny"
 
-[workspace.lints.clippy]
+[lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"
@@ -131,11 +123,3 @@ libxcb = "*"
 libXcursor = "*"
 libXrandr = "*"
 libXi = "*"
-
-# Dev builds keep protonctx itself at opt-level 0 for fast incremental
-# rebuilds, but optimize every dependency: at opt-level 0 the tiny-skia /
-# cosmic-text / swash rendering stack takes ~340 ms per full frame and
-# hovering pegs a core (tiny-skia alone at opt-level 2 only reached ~270 ms;
-# all dependencies reach ~25 ms). Only clean builds pay for it.
-[profile.dev.package."*"]
-opt-level = 2

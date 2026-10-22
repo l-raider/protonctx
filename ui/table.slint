@@ -31,6 +31,13 @@ component HeaderCell {
     in property <length> reserve: 0px;
     callback clicked;
 
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-description: !root.active ? "" : root.descending ? "sorted descending" : "sorted ascending";
+    accessible-action-default => {
+        root.clicked();
+    }
+
     Rectangle {
         background: Theme.header;
     }
@@ -39,6 +46,7 @@ component HeaderCell {
         padding-left: TableMetrics.cell-padding - 2px;
         padding-right: TableMetrics.cell-padding - 2px + root.reserve;
         Text {
+            accessible-role: none;
             horizontal-stretch: 1;
             text: root.title;
             font-weight: 500;
@@ -112,6 +120,28 @@ export component GamesTable {
     callback row-pressed(int);
     // A right press on a row, in window coordinates.
     callback row-context(int, length, length);
+
+    accessible-role: table;
+    accessible-label: "Games";
+
+    // The keyboard route to the context menu (Menu key, Shift+F10): scroll
+    // the selected row into view and open the menu under it.
+    public function open-context-for-selected() {
+        if root.selected < 0 || root.selected >= root.rows.length {
+            return;
+        }
+        let top = root.selected * TableMetrics.row-height;
+        if top + body.offset-y < 0 {
+            body.offset-y = -top;
+        } else if top + TableMetrics.row-height + body.offset-y > body.visible-height {
+            body.offset-y = body.visible-height - top - TableMetrics.row-height;
+        }
+        root.row-context(
+            root.selected,
+            self.absolute-position.x + 1px + 4 * TableMetrics.cell-padding,
+            self.absolute-position.y + 1px + TableMetrics.header-height
+                + top + TableMetrics.row-height + body.offset-y);
+    }
 
     property <length> inner-width: self.width - 2px;
     property <length> compat-width: max(TableMetrics.min-compat, root.inner-width - root.name-width - root.app-id-width);
@@ -207,6 +237,15 @@ export component GamesTable {
                 width: root.total-width;
                 height: TableMetrics.row-height;
 
+                accessible-role: list-item;
+                accessible-label: row.name + ", App ID " + row.app-id + ", " + row.tool;
+                accessible-item-selectable: true;
+                accessible-item-selected: root.selected == index;
+                accessible-item-index: index;
+                accessible-action-default => {
+                    root.row-pressed(index);
+                }
+
                 property <bool> odd: Math.mod(index, 2) == 1;
                 property <bool> filled: root.focused && root.selected == index;
                 property <color> text-color: self.filled ? Theme.primary-foreground : Theme.list-foreground;
@@ -227,6 +266,7 @@ export component GamesTable {
 
                 // gpui centres row text 1 px lower than a plain centre.
                 Text {
+                    accessible-role: none;
                     x: TableMetrics.cell-padding;
                     y: 2px;
                     width: root.name-width - 2 * TableMetrics.cell-padding;
@@ -237,6 +277,7 @@ export component GamesTable {
                     overflow: elide;
                 }
                 Text {
+                    accessible-role: none;
                     x: root.name-width + TableMetrics.cell-padding;
                     y: 2px;
                     width: root.app-id-width - 2 * TableMetrics.cell-padding;
@@ -247,6 +288,7 @@ export component GamesTable {
                     overflow: elide;
                 }
                 Text {
+                    accessible-role: none;
                     x: root.name-width + root.app-id-width + TableMetrics.cell-padding;
                     y: 2px;
                     width: root.compat-width - 2 * TableMetrics.cell-padding;

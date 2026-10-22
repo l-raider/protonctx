@@ -272,6 +272,23 @@ fn main_window_routes_input_to_its_callbacks() {
     );
     assert_eq!(calls.take(), ["launch regedit"]);
 
+    // The Menu key and Shift+F10 open the same menu under the selected row
+    // (row 3 ends at y 174; the menu opens at x 36).
+    main.set_selected(3);
+    let registry_editor = 174.0 + 4.0 + 28.0 + 9.0 + 28.0 + 14.0;
+    key(window, slint::platform::Key::Menu);
+    click(window, 60.0, registry_editor, PointerEventButton::Left);
+    assert_eq!(calls.take(), ["launch regedit"]);
+    window.dispatch_event(WindowEvent::KeyPressed {
+        text: slint::platform::Key::Shift.into(),
+    });
+    key(window, slint::platform::Key::F10);
+    window.dispatch_event(WindowEvent::KeyReleased {
+        text: slint::platform::Key::Shift.into(),
+    });
+    click(window, 60.0, registry_editor, PointerEventButton::Left);
+    assert_eq!(calls.take(), ["launch regedit"]);
+
     // The hamburger menu: Settings, then Clear logs after reopening.
     click(window, 16.0, 16.0, PointerEventButton::Left);
     click(window, 40.0, 35.0 + 4.0 + 14.0, PointerEventButton::Left);

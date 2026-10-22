@@ -233,18 +233,11 @@ pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
 /// Whether the KDE reader would be selected for `XDG_CURRENT_DESKTOP` (a
 /// colon-separated list). Delegates to `native-theme`'s own detection so the
 /// guard and the reader cannot disagree (exact case, first recognized wins).
-#[cfg(target_os = "linux")]
 fn is_kde(desktop: Option<&str>) -> bool {
     desktop.is_some_and(|desktop| {
         native_theme::detect::parse_linux_desktop(desktop)
             == native_theme::detect::LinuxDesktop::Kde
     })
-}
-
-/// There is only a KDE reader on Linux.
-#[cfg(not(target_os = "linux"))]
-fn is_kde(_desktop: Option<&str>) -> bool {
-    false
 }
 
 #[cfg(test)]
@@ -257,7 +250,6 @@ mod tests {
     };
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn is_kde_matches_the_native_theme_detection() {
         assert!(is_kde(Some("KDE")));
         assert!(is_kde(Some("KDE:GNOME")));
@@ -296,7 +288,6 @@ mod tests {
     /// re-derives them at the base logical DPI so the window scale factor is
     /// the only display-scale multiplier left.
     #[test]
-    #[cfg(target_os = "linux")]
     fn kde_point_fonts_resolved_at_display_dpi_are_normalized_to_base_dpi() {
         const KDE_INI: &str = "[General]\n\
             ColorScheme=BreezeLight\n\

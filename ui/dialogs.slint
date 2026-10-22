@@ -14,6 +14,7 @@ component DialogWindow inherits Window {
     default-font-size: Theme.font-size;
     default-font-weight: Theme.font-weight;
     icon: @image-url("../packaging/icons/hicolor/256x256/apps/protonctx.png");
+    forward-focus: keys;
 
     // Esc (and the WM close button, from Rust).
     callback dismiss();
@@ -33,10 +34,6 @@ component DialogWindow inherits Window {
             reject
         }
         @children
-    }
-
-    init => {
-        keys.focus();
     }
 }
 

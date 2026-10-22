@@ -9,7 +9,7 @@
 // would reject. Hand-written code here still cannot use `unsafe`.
 #![deny(unsafe_code)]
 // Test fixtures may panic on setup failure (`unwrap` is fine in tests); the
-// `unwrap_used = "deny"` workspace lint applies to production code only.
+// `unwrap_used = "deny"` lint applies to production code only.
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
 mod app;

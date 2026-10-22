@@ -23,6 +23,15 @@ export component OutlineButton {
     in property <bool> default-focus: false;
     callback clicked;
 
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
     // Whole pixels so the 1 px outline lands on the pixel grid.
     property <length> natural: ceil((content.preferred-width + 30px) / 1px) * 1px;
     min-width: max(80px, self.natural);
@@ -53,6 +62,7 @@ export component OutlineButton {
             colorize: label.color;
         }
         label := Text {
+            accessible-role: none;
             text: root.text;
             vertical-alignment: center;
             color: root.enabled
@@ -77,7 +87,18 @@ export component ToolbarButton {
     in property <bool> enabled: true;
     in property <bool> active: false;
     in property <length> padding-x: 0px;
+    // What assistive technology announces when the button shows no text.
+    in property <string> name;
     callback clicked;
+
+    accessible-role: button;
+    accessible-label: root.text != "" ? root.text : root.name;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
 
     height: Theme.rem(8);
     min-width: root.text == "" ? self.height : content.preferred-width + 2 * root.padding-x;
@@ -105,6 +126,7 @@ export component ToolbarButton {
             colorize: root.fg;
         }
         if root.text != "": Text {
+            accessible-role: none;
             text: root.text;
             vertical-alignment: center;
             color: root.fg;
@@ -130,6 +152,16 @@ export component MenuRow {
 
     height: 28px;
 
+    // Slint 1.18 has no menu-item role; a button is the closest.
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.activated();
+        }
+    }
+
     Rectangle {
         border-radius: Theme.radius;
         background: root.enabled && touch.has-hover ? Theme.accent : transparent;
@@ -146,6 +178,7 @@ export component MenuRow {
             colorize: label.color;
         }
         label := Text {
+            accessible-role: none;
             text: root.text;
             vertical-alignment: center;
             color: root.enabled
@@ -315,6 +348,19 @@ export component CheckBox {
 
     height: max(box.height, label.preferred-height);
 
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.toggle();
+    }
+
+    function toggle() {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+
     box := Rectangle {
         x: 0;
         y: (parent.height - self.height) / 2;
@@ -332,6 +378,7 @@ export component CheckBox {
     }
 
     label := Text {
+        accessible-role: none;
         x: box.width + Theme.rem(2);
         // gpui's checkbox label is text_sm (0.875 rem).
         font-size: Theme.font-size * 0.875;
@@ -342,8 +389,7 @@ export component CheckBox {
 
     touch := TouchArea {
         clicked => {
-            root.checked = !root.checked;
-            root.toggled(root.checked);
+            root.toggle();
         }
     }
 }

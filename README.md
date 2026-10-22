@@ -57,10 +57,8 @@ also required.
 cargo run
 ```
 
-Dev builds keep protonctx itself unoptimised for fast rebuilds but optimise all
-dependencies (the software renderer is unusably slow otherwise), so the first build
-takes a few minutes. `cargo run -- --preset light` (or `dark`) forces the bundled
-Breeze colours instead of the live KDE scheme.
+`cargo run -- --preset light` (or `dark`) forces the bundled Breeze colours instead of
+the live KDE scheme.
 
 protonctx runs as an X11 client (XWayland on a Plasma Wayland session, which Plasma 6.8
 keeps after dropping the X11 session). Slint (through winit) cannot make one window the
