@@ -8,6 +8,7 @@
 //! to the main window.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak as RcWeak};
 use std::time::Duration;
@@ -36,6 +37,10 @@ pub struct App {
     clipboard: Option<arboard::Clipboard>,
     /// Log revision and trimmed-line count the window last showed.
     shown_log: (u64, usize),
+    /// X11 windows already marked as dialogs of the main window. Hiding a
+    /// dialog keeps its X11 window and the hints on it, so only its first
+    /// showing needs the remap (see `parent_when_mapped`).
+    parented: Rc<RefCell<HashSet<u64>>>,
 
     about: Option<AboutDialog>,
     settings: Option<SettingsDialog>,
@@ -62,6 +67,7 @@ pub fn start(ui: &MainWindow, tokens: AppTokens) -> Shared {
             launch_sender,
             clipboard: None,
             shown_log: (0, 0),
+            parented: Rc::default(),
             about: None,
             settings: None,
             error: None,
@@ -469,7 +475,10 @@ impl App {
         }
         // Without an X display the windows are native Wayland ones, which
         // cannot be parented (see `ui::select_backend`).
-        if crate::ui::has_x11_display() {
+        let parented = window
+            .with_winit_window(|w| u64::from(w.id()))
+            .is_some_and(|id| self.parented.borrow().contains(&id));
+        if crate::ui::has_x11_display() && !parented {
             self.parent_to_main(which);
         }
         self.sync();
@@ -491,23 +500,24 @@ impl App {
     /// Mark a shown dialog as a dialog of the main window on X11.
     fn parent_to_main(&self, which: Which) {
         let main = self.ui.clone();
+        let done = self.parented.clone();
         match which {
             Which::About => self
                 .about
                 .as_ref()
-                .map(|d| parent_when_mapped(d.as_weak(), main, 0)),
+                .map(|d| parent_when_mapped(d.as_weak(), main, done, 0)),
             Which::Settings => self
                 .settings
                 .as_ref()
-                .map(|d| parent_when_mapped(d.as_weak(), main, 0)),
+                .map(|d| parent_when_mapped(d.as_weak(), main, done, 0)),
             Which::Error => self
                 .error
                 .as_ref()
-                .map(|d| parent_when_mapped(d.as_weak(), main, 0)),
+                .map(|d| parent_when_mapped(d.as_weak(), main, done, 0)),
             Which::Delete => self
                 .delete
                 .as_ref()
-                .map(|(d, _)| parent_when_mapped(d.as_weak(), main, 0)),
+                .map(|(d, _)| parent_when_mapped(d.as_weak(), main, done, 0)),
         };
     }
 
@@ -717,10 +727,12 @@ fn dismiss_on_close(window: &slint::Window, me: RcWeak<RefCell<App>>, which: Whi
 
 /// Once the dialog's X11 window exists, mark it transient for the main
 /// window, then unmap and map it so the window manager reads the hints as it
-/// manages it (centred on and above the parent, off the taskbar).
+/// manages it (centred on and above the parent, off the taskbar). The window
+/// is recorded in `done` so later showings skip this.
 fn parent_when_mapped<T: ComponentHandle + 'static>(
     dialog: slint::Weak<T>,
     main: slint::Weak<MainWindow>,
+    done: Rc<RefCell<HashSet<u64>>>,
     attempt: u32,
 ) {
     const RETRY: Duration = Duration::from_millis(5);
@@ -743,13 +755,14 @@ fn parent_when_mapped<T: ComponentHandle + 'static>(
                 };
                 match crate::x11_dialog::mark_dialog(dialog_id, main_id) {
                     Ok(()) => {
+                        done.borrow_mut().insert(u64::from(dialog_id));
                         let _ = window.hide();
                         let _ = window.show();
                     }
                     Err(error) => eprintln!("protonctx: could not parent the dialog: {error}"),
                 }
             }
-            _ if attempt < ATTEMPTS => parent_when_mapped(dialog, main, attempt + 1),
+            _ if attempt < ATTEMPTS => parent_when_mapped(dialog, main, done, attempt + 1),
             _ => eprintln!("protonctx: the dialog window never appeared"),
         }
     });
