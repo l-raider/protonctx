@@ -81,6 +81,29 @@ fn default_library_fallback(steam_root: &std::path::Path) -> Vec<std::path::Path
     }
 }
 
+/// The libraries to scan: those `libraryfolders.vdf` lists, or the default
+/// library when it lists none. An unreadable or corrupt file is reported in
+/// `warnings`, since games on the other libraries then go missing.
+fn libraries_of(
+    steam_root: &std::path::Path,
+    warnings: &mut Vec<String>,
+) -> Vec<std::path::PathBuf> {
+    match libraryfolders::library_folders(steam_root) {
+        Ok(libs) if !libs.is_empty() => libs,
+        result => {
+            if let Err(e) = result {
+                warnings.push(format!(
+                    "Failed to read the Steam library list, scanning only the default library: {e}"
+                ));
+            }
+            // A "library" is the directory that *contains* `steamapps/`, so
+            // the Steam root itself is the default library (installed_apps()
+            // appends `steamapps` to each entry).
+            default_library_fallback(steam_root)
+        }
+    }
+}
+
 /// The outcome of a successful discovery scan: the games plus any non-fatal
 /// problems worth surfacing to the user (corrupt `config.vdf`, unreadable
 /// manifest directories, unresolvable prefixes).
@@ -107,13 +130,7 @@ pub fn discover_games() -> Result<Discovery, SteamError> {
 
     let mut warnings: Vec<String> = Vec::new();
 
-    let libraries = match libraryfolders::library_folders(&steam_root) {
-        Ok(libs) if !libs.is_empty() => libs,
-        // Fall back to the default library. A "library" is the directory that
-        // *contains* `steamapps/`, so the Steam root itself is the default
-        // library (installed_apps() appends `steamapps` to each entry).
-        _ => default_library_fallback(&steam_root),
-    };
+    let libraries = libraries_of(&steam_root, &mut warnings);
 
     let compat_tools = match compat::compat_tool_map(&steam_root) {
         Ok(map) => map,
@@ -257,6 +274,46 @@ mod tests {
         let libs = default_library_fallback(&root);
         let lib: &PathBuf = &libs[0];
         assert!(!lib.ends_with("steamapps"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_corrupt_library_list_is_reported_and_the_root_is_scanned() {
+        let root = crate::test_support::temp_dir("libraries_corrupt");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        std::fs::write(
+            root.join("config").join("libraryfolders.vdf"),
+            "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(libraries_of(&root, &mut warnings), vec![root.clone()]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("library list"), "{warnings:?}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_readable_library_list_adds_no_warning() {
+        let root = crate::test_support::temp_dir("libraries_ok");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(
+            root.join("config").join("libraryfolders.vdf"),
+            format!(
+                "\"libraryfolders\"\n{{\n\t\"0\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t}}\n}}\n",
+                root.display()
+            ),
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(libraries_of(&root, &mut warnings), vec![root.clone()]);
+        assert!(warnings.is_empty(), "{warnings:?}");
 
         std::fs::remove_dir_all(&root).ok();
     }
