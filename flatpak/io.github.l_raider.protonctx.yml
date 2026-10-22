@@ -20,6 +20,11 @@ finish-args:
   # ~/.local/share/Steam and ~/.steam/. The one write, deleting a shader
   # cache, runs on the host through flatpak-spawn instead.
   - --filesystem=home:ro
+  # The KDE colour scheme, fonts and reduced-motion setting. Inside the sandbox
+  # XDG_CONFIG_HOME is the app's own config directory, where native-theme
+  # looks for kdeglobals; this bind-mounts the host file there (read-only).
+  # Without it the theme reader finds no scheme and falls back to light Breeze.
+  - --filesystem=xdg-config/kdeglobals:ro
   # Lets the app talk to the org.freedesktop.Flatpak D-Bus interface to run
   # commands on the host (flatpak-spawn --host): Proton launches,
   # document-portal lookups and shader-cache deletion.
