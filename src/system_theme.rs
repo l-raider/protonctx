@@ -21,7 +21,7 @@ use native_theme::{AccessibilityPreferences, SystemTheme};
 /// KDE.
 pub(crate) const FALLBACK_PRESET: &str = "kde-breeze";
 
-/// Base logical DPI for point-stated desktop font sizes. iced already applies
+/// Base logical DPI for point-stated desktop font sizes. Slint already applies
 /// the display scale factor (the Wayland compositor scale; `Xft.dpi / 96` on
 /// X11) to every logical pixel, so resolving points at the display DPI would
 /// apply that same signal twice. Desktop point sizes therefore resolve at the
@@ -198,8 +198,7 @@ fn read_system_theme() -> Result<SystemTheme, String> {
 /// tests can pass [`AccessibilityPreferences::default`] and stay I/O-free.
 ///
 /// The bundled preset always resolves; should it ever fail, the failure is
-/// reported and iced's built-in palette colours are used by the caller via
-/// the same preset in the other mode.
+/// reported and the same preset is resolved in the other mode.
 pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
     let resolve = |is_dark: bool| -> native_theme::Result<ResolvedTheme> {
         let spec = native_theme::theme::Theme::preset(FALLBACK_PRESET)?;

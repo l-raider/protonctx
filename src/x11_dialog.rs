@@ -1,12 +1,13 @@
 //! Marks dialog windows as transient dialogs of the main window on X11.
 //!
-//! iced 0.14 has no parent/child window setting, but on X11 the relationship
-//! is plain window properties any client may set: `WM_TRANSIENT_FOR` names
-//! the parent, which makes the window manager keep the dialog above it,
-//! centre it on it, and leave it out of the taskbar, as Qt and GTK dialogs
-//! are. The dialog is created unmapped, marked here through a separate
-//! pure-Rust X11 connection, then shown, so the window manager sees the hints
-//! when it first manages the window.
+//! Slint (through winit) has no parent/child window setting, but on X11 the
+//! relationship is plain window properties any client may set:
+//! `WM_TRANSIENT_FOR` names the parent, which makes the window manager keep
+//! the dialog above it, centre it on it, and leave it out of the taskbar, as
+//! Qt and GTK dialogs are. The dialog is marked here through a separate
+//! pure-Rust X11 connection once its window exists, then remapped (see
+//! `app::parent_when_mapped`), so the window manager sees the hints when it
+//! manages the window.
 
 use x11rb::connection::Connection as _;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode};

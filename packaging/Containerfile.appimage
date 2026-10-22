@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates build-essential \
     file git \
     librsvg2-bin \
+    pkg-config libfontconfig-dev \
   && rm -rf /var/lib/apt/lists/*
 
 # Rust stable (edition 2024 requires 1.85+; Cargo.toml requires 1.95+).

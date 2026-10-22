@@ -28,11 +28,11 @@ Requirements:
 - Rust 2024 edition toolchain (1.98+).
 - [mold](https://github.com/rui314/mold): `.cargo/config.toml` links with it for fast
   builds (`dnf install mold` / `apt install mold`; or override with `RUSTFLAGS=""`).
-- A C toolchain for linking (`build-essential` / `gcc`); no development headers are
-  needed.
+- A C toolchain for linking (`build-essential` / `gcc`), `pkg-config` and the fontconfig
+  headers (`libfontconfig-dev` / `fontconfig-devel`), which Slint's font lookup links.
 - At runtime the X11 libraries (Xlib, xcb, Xcursor, Xrandr, Xi) and xkbcommon are loaded
-  dynamically; every desktop install already has them, and Plasma runs X11 apps through
-  XWayland. No OpenSSL and no GPU driver are needed.
+  dynamically; every desktop install already has them and fontconfig, and Plasma runs X11
+  apps through XWayland. No OpenSSL and no GPU driver are needed.
 
 ```sh
 cargo build --release

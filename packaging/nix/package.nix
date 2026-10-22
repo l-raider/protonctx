@@ -3,12 +3,14 @@
   rustPlatform,
   fetchFromGitHub,
   autoPatchelfHook,
+  pkg-config,
   libxkbcommon,
   libx11,
   libxcb,
   libxcursor,
   libxi,
   libxrandr,
+  fontconfig,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -18,8 +20,8 @@ rustPlatform.buildRustPackage (finalAttrs: {
   src = fetchFromGitHub {
     owner = "l-raider";
     repo = "protonctx";
-    # Tag the release that contains the iced port so this cannot resolve to an
-    # older (Qt or GPUI) tree.
+    # Tag the release that contains the Slint port so this cannot resolve to
+    # an older (Qt, GPUI or iced) tree.
     rev = "v${finalAttrs.version}";
     # Update on each release: run `nix-prefetch-github l-raider protonctx --rev v${version}`
     # and paste the resulting hash here.
@@ -30,12 +32,18 @@ rustPlatform.buildRustPackage (finalAttrs: {
   # ${src}/Cargo.lock (it is committed upstream) and derives the dependency
   # hash from it.
 
-  # iced (winit + softbuffer on X11, tiny-skia renderer) dlopen()s the X11
-  # and xkbcommon libraries at runtime; the binary itself only links glibc.
+  # Slint (winit + softbuffer on X11, software renderer) links fontconfig
+  # (found through pkg-config) and dlopen()s the X11 and xkbcommon libraries
+  # at runtime.
   # The dlopen()'d libraries are added to the rpath in postFixup, since
   # autoPatchelfHook only handles NEEDED entries.
   nativeBuildInputs = [
     autoPatchelfHook
+    pkg-config
+  ];
+
+  buildInputs = [
+    fontconfig
   ];
 
   runtimeDependencies = [
@@ -72,7 +80,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
   meta = {
     description = "Launch executables inside a Steam game's Proton context";
     longDescription = ''
-      A single-window helper GUI (iced) that lists installed Steam games and
+      A single-window helper GUI (Slint) that lists installed Steam games and
       lets you run an arbitrary .exe — or a built-in Wine tool such as
       winecfg/taskmgr — inside a selected game's Proton prefix.
     '';

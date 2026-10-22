@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates build-essential \
     file git \
     librsvg2-bin \
+    pkg-config libfontconfig-dev \
     dpkg-dev \
   && rm -rf /var/lib/apt/lists/*
 

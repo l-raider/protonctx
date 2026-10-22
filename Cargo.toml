@@ -12,10 +12,10 @@ repository = "https://github.com/l-raider/protonctx"
 workspace = true
 
 [dependencies]
-# Slint on X11 (XWayland on Plasma) with the CPU software renderer: the
-# like-for-like counterpart of the iced build's tiny-skia renderer. X11 so
-# dialogs can be transient children of the main window (see x11_dialog).
-slint = { version = "=1.18.1", default-features = false, features = [
+# Slint on X11 (XWayland on Plasma) with the CPU software renderer (no GPU
+# driver needed). X11 so dialogs can be transient children of the main window
+# (see x11_dialog).
+slint = { version = "1.18", default-features = false, features = [
     "std",
     "compat-1-2",
     "backend-winit-x11",
@@ -77,8 +77,9 @@ unwrap_used = "deny"
 # --- Debian packaging (cargo-deb) ---
 # The binary is listed explicitly to ensure it is packed regardless of
 # cargo-deb's auto-detection. `$auto` (dpkg-shlibdeps, needs a Debian/Ubuntu
-# build host) only finds glibc: winit and softbuffer dlopen() the X11 and
-# xkbcommon libraries at runtime, so those are listed explicitly.
+# build host) finds glibc and fontconfig (linked by Slint's font lookup):
+# winit and softbuffer dlopen() the X11 and xkbcommon libraries at runtime, so
+# those are listed explicitly.
 [package.metadata.deb]
 name = "protonctx"
 depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxrandr2, libxi6"
@@ -101,8 +102,9 @@ assets = [
 ]
 
 # --- RPM packaging (cargo-generate-rpm) ---
-# Automatic requirements only see glibc; the dlopen()'d display libraries are
-# required explicitly (see the Debian note above).
+# Automatic requirements see only the linked libraries (glibc, fontconfig);
+# the dlopen()'d display libraries are required explicitly (see the Debian
+# note above).
 [package.metadata.generate-rpm]
 name = "protonctx"
 release = "1"

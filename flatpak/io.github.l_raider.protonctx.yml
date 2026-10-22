@@ -13,7 +13,7 @@ finish-args:
   # X11 (XWayland on a Wayland session), not fallback-x11: protonctx runs on
   # X11 so its dialogs can be transient children of the main window.
   - --socket=x11
-  # No --device=dri: the iced tiny-skia renderer draws on the CPU and
+  # No --device=dri: Slint's software renderer draws on the CPU and
   # presents through shared memory.
   # Read-only access to $HOME so protonctx can read the Steam vdf files
   # (libraryfolders.vdf, config.vdf, appmanifest_*.acf) that live under
