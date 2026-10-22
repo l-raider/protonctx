@@ -35,8 +35,9 @@ impl LogBuffer {
         self.trimmed
     }
 
-    /// Append `message` as a `[HH:MM:SS.mmm] message` line. Returns how many
-    /// of the oldest lines a trim removed (0 when none ran).
+    /// Append `message` as a `[HH:MM:SS.mmm] message` line. A message with
+    /// line breaks (a host command's stderr) counts as every line it spans.
+    /// Returns how many of the oldest lines a trim removed (0 when none ran).
     pub fn append(&mut self, message: &str) -> usize {
         let line = format!("[{}] {}", crate::log::timestamp(), message);
         self.push_line(&line)
@@ -45,7 +46,7 @@ impl LogBuffer {
     fn push_line(&mut self, line: &str) -> usize {
         self.text.push_str(line);
         self.text.push('\n');
-        self.lines += 1;
+        self.lines += 1 + line.matches('\n').count();
         self.revision = self.revision.wrapping_add(1);
         if self.lines <= MAX_LOG_LINES + TRIM_SLACK {
             return 0;
@@ -102,6 +103,24 @@ mod tests {
         assert_eq!(removed + lines, total);
         assert!(!log.text().contains("] line 0\n"));
         assert!(log.text().ends_with(&format!("] line {}\n", total - 1)));
+    }
+
+    #[test]
+    fn multi_line_messages_count_every_line() {
+        let mut log = LogBuffer::default();
+        log.append("removing on the host failed:\nrm: denied a\nrm: denied b");
+        assert_eq!(log.line_count(), 3);
+        assert_eq!(log.text().lines().count(), 3);
+
+        // The cap holds in physical lines too.
+        let mut removed = 0;
+        for index in 0..(MAX_LOG_LINES + TRIM_SLACK) {
+            removed += log.append(&format!("message {index}\ncontinued {index}"));
+        }
+        let lines = log.line_count();
+        assert!(lines <= MAX_LOG_LINES + TRIM_SLACK, "{lines}");
+        assert_eq!(log.text().lines().count(), lines);
+        assert_eq!(removed + lines, 3 + 2 * (MAX_LOG_LINES + TRIM_SLACK));
     }
 
     #[test]
