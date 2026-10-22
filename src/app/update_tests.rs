@@ -789,3 +789,37 @@ fn status_spinner_is_the_lucide_indicator() {
     // The Lucide indicator is an SVG drawn by iced; it needs no rasterizer.
     assert!(state().spinner.is_indicator());
 }
+
+#[test]
+fn dialogs_are_shown_once_parented() {
+    let mut state = state();
+    let _ = state.update(Message::OpenAbout);
+    let about = dialog(&state, &DialogKind::About);
+    // Without the main window's X11 id there is nothing to parent to: the
+    // dialog is mapped and focused straight away.
+    assert_eq!(
+        state
+            .update(Message::DialogCreated(about, 0x1800006))
+            .units(),
+        2
+    );
+
+    // With it, the hints are set in the background first.
+    let _ = state.update(Message::MainRawId(0x1800002));
+    assert_eq!(
+        state
+            .update(Message::DialogCreated(about, 0x1800006))
+            .units(),
+        1
+    );
+    // A failed hint still shows the dialog.
+    assert_eq!(
+        state
+            .update(Message::DialogReady(about, Err("no display".to_string())))
+            .units(),
+        2
+    );
+    // A dialog closed in the meantime is not resurrected.
+    let _ = state.update(Message::Window(about, WindowInput::Closed));
+    assert_eq!(state.update(Message::DialogReady(about, Ok(()))).units(), 0);
+}

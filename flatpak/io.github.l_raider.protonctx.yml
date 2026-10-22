@@ -10,8 +10,9 @@ command: protonctx
 
 finish-args:
   - --share=ipc
-  - --socket=fallback-x11
-  - --socket=wayland
+  # X11 (XWayland on a Wayland session), not fallback-x11: protonctx runs on
+  # X11 so its dialogs can be transient children of the main window.
+  - --socket=x11
   # No --device=dri: the iced tiny-skia renderer draws on the CPU and
   # presents through shared memory.
   # Read-only access to $HOME so protonctx can read the Steam vdf files

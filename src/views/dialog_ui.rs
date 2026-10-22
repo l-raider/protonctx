@@ -131,6 +131,8 @@ pub fn window_settings(kind: &DialogKind, parent: Option<(Point, Size)>) -> wind
         resizable: false,
         minimizable: false,
         position,
+        // Mapped only after the X11 dialog hints are set (`x11_dialog`).
+        visible: false,
         decorations: true,
         icon: crate::assets::window_icon(),
         // The WM close button is routed through the same dismiss rule as Esc.

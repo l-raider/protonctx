@@ -27,6 +27,7 @@ mod theme;
 mod views;
 #[cfg(test)]
 mod visual_tests;
+mod x11_dialog;
 mod xdg;
 
 /// `--preset light|dark` forces the bundled Breeze preset instead of the live

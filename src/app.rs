@@ -153,6 +153,12 @@ pub enum Message {
     ShaderCacheDeleted(Result<bool, String>),
 
     // ---- Dialogs ----
+    /// The main window's X11 id, for parenting dialogs.
+    MainRawId(u64),
+    /// A dialog window exists (still unmapped) and has this X11 id.
+    DialogCreated(window::Id, u64),
+    /// The dialog's X11 hints were set (or failed); show it now.
+    DialogReady(window::Id, Result<(), String>),
     DialogButton(window::Id, DialogButton),
     RememberLastDir(bool),
 
@@ -226,6 +232,8 @@ pub struct State {
     /// Wayland) and size, for centring dialogs over it.
     main_position: Option<Point>,
     main_size: Size,
+    /// The main window's X11 window id, once known.
+    main_raw_id: Option<u32>,
 
     pub theme: iced::Theme,
 }
@@ -294,6 +302,7 @@ impl State {
             dialogs: BTreeMap::new(),
             main_position: None,
             main_size: MAIN_SIZE,
+            main_raw_id: None,
             theme: iced::Theme::Dark,
         };
         state.sync_table();
@@ -448,6 +457,25 @@ impl State {
             },
             Message::ConfirmDeleteShaderCache => self.confirm_delete_shader_cache(),
             Message::ShaderCacheDeleted(result) => self.shader_cache_deleted(result),
+            Message::MainRawId(raw) => {
+                self.main_raw_id = u32::try_from(raw).ok();
+                Task::none()
+            }
+            Message::DialogCreated(window, raw) => {
+                let (Some(parent), Ok(dialog)) = (self.main_raw_id, u32::try_from(raw)) else {
+                    return self.show_dialog(window);
+                };
+                Task::perform(
+                    async move { crate::x11_dialog::mark_dialog(dialog, parent) },
+                    move |result| Message::DialogReady(window, result),
+                )
+            }
+            Message::DialogReady(window, result) => {
+                if let Err(error) = result {
+                    eprintln!("protonctx: could not mark the dialog as transient: {error}");
+                }
+                self.show_dialog(window)
+            }
             Message::DialogButton(window, button) => self.dialog_button(window, button),
             Message::RememberLastDir(value) => self.apply_remember_last_dir(value),
             Message::LaunchEvents(events) => {
@@ -473,6 +501,7 @@ impl State {
             WindowInput::Opened { position, size } => {
                 self.main_position = position;
                 self.main_size = size;
+                return window::raw_id::<Message>(window).map(Message::MainRawId);
             }
             WindowInput::Moved(position) => self.main_position = Some(position),
             WindowInput::Resized(size) => self.main_size = size,
@@ -557,8 +586,22 @@ impl State {
             .map(|position| (position, self.main_size));
         let (window, open) = window::open(dialog_ui::window_settings(&kind, parent));
         self.dialogs.insert(window, kind);
-        // The window's own settings do the rest; nothing to do once open.
-        open.discard()
+        // The window opens unmapped; it is parented to the main window
+        // (`DialogCreated`, `DialogReady`) before it is shown.
+        open.then(|window| {
+            window::raw_id::<Message>(window).map(move |raw| Message::DialogCreated(window, raw))
+        })
+    }
+
+    /// Map a dialog window that was created hidden, and focus it.
+    fn show_dialog(&mut self, window: window::Id) -> Task<Message> {
+        if !self.dialogs.contains_key(&window) {
+            return Task::none();
+        }
+        Task::batch([
+            window::set_mode(window, window::Mode::Windowed),
+            window::gain_focus(window),
+        ])
     }
 
     fn dialog_button(&mut self, window: window::Id, button: DialogButton) -> Task<Message> {

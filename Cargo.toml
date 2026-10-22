@@ -14,7 +14,6 @@ workspace = true
 [dependencies]
 iced = { version = "0.14", default-features = false, features = [
     "tiny-skia",
-    "wayland",
     "x11",
     "thread-pool",
     "crisp",
@@ -35,6 +34,8 @@ native-theme-iced = { version = "0.6.1", default-features = false, features = [
 ] }
 iced_aw = { version = "0.14.1", default-features = false, features = ["menu", "context_menu"] }
 iced_table2 = "0.14.2"
+# Dialog hints (WM_TRANSIENT_FOR, dialog type) on X11; pure Rust connection.
+x11rb = "0.13"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-channel = "2"
 # Timers for the launch-output batch window and the spinner tick: the
@@ -80,11 +81,11 @@ unwrap_used = "deny"
 # --- Debian packaging (cargo-deb) ---
 # The binary is listed explicitly to ensure it is packed regardless of
 # cargo-deb's auto-detection. `$auto` (dpkg-shlibdeps, needs a Debian/Ubuntu
-# build host) only finds glibc: winit and softbuffer dlopen() the Wayland,
-# xkbcommon and X11 libraries at runtime, so those are listed explicitly.
+# build host) only finds glibc: winit and softbuffer dlopen() the X11 and
+# xkbcommon libraries at runtime, so those are listed explicitly.
 [package.metadata.deb]
 name = "protonctx"
-depends = "$auto, libwayland-client0, libwayland-cursor0, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxrandr2, libxi6"
+depends = "$auto, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxrandr2, libxi6"
 section = "utils"
 priority = "optional"
 maintainer = "protonctx maintainers"
@@ -124,8 +125,6 @@ assets = [
 ]
 
 [package.metadata.generate-rpm.requires]
-libwayland-client = "*"
-libwayland-cursor = "*"
 libxkbcommon = "*"
 libxkbcommon-x11 = "*"
 libX11 = "*"

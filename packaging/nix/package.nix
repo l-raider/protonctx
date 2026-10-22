@@ -2,14 +2,13 @@
   lib,
   rustPlatform,
   fetchFromGitHub,
-  pkg-config,
   autoPatchelfHook,
   libxkbcommon,
   libx11,
+  libxcb,
   libxcursor,
   libxi,
   libxrandr,
-  wayland,
 }:
 
 rustPlatform.buildRustPackage (finalAttrs: {
@@ -31,26 +30,18 @@ rustPlatform.buildRustPackage (finalAttrs: {
   # ${src}/Cargo.lock (it is committed upstream) and derives the dependency
   # hash from it.
 
-  # iced (winit + softbuffer, tiny-skia renderer) dlopen()s the Wayland
-  # client/cursor, xkbcommon and X11 libraries at runtime; the binary itself
-  # only links glibc. pkg-config lets tiny-xlib's build script locate Xlib.
+  # iced (winit + softbuffer on X11, tiny-skia renderer) dlopen()s the X11
+  # and xkbcommon libraries at runtime; the binary itself only links glibc.
   # The dlopen()'d libraries are added to the rpath in postFixup, since
   # autoPatchelfHook only handles NEEDED entries.
   nativeBuildInputs = [
-    pkg-config
     autoPatchelfHook
   ];
 
-  buildInputs = [
-    libxkbcommon
-    libx11
-    wayland
-  ];
-
   runtimeDependencies = [
-    wayland
     libxkbcommon
     libx11
+    libxcb
     libxcursor
     libxi
     libxrandr

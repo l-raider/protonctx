@@ -28,13 +28,11 @@ Requirements:
 - Rust 2024 edition toolchain (1.98+).
 - [mold](https://github.com/rui314/mold): `.cargo/config.toml` links with it for fast
   builds (`dnf install mold` / `apt install mold`; or override with `RUSTFLAGS=""`).
-- A C toolchain and `pkg-config` (a few build scripts in the dependency tree), plus the
-  Wayland, xkbcommon and Xlib development files they probe. On Debian/Ubuntu:
-  `build-essential pkg-config libwayland-dev libxkbcommon-dev libx11-dev`. On Fedora:
-  `gcc pkgconf-pkg-config wayland-devel libxkbcommon-devel libX11-devel`.
-- At runtime the Wayland client/cursor, xkbcommon and X11 (Xlib, Xcursor, Xrandr, Xi)
-  libraries are loaded dynamically; every desktop install already has them. No OpenSSL
-  and no GPU driver are needed.
+- A C toolchain for linking (`build-essential` / `gcc`); no development headers are
+  needed.
+- At runtime the X11 libraries (Xlib, xcb, Xcursor, Xrandr, Xi) and xkbcommon are loaded
+  dynamically; every desktop install already has them, and Plasma runs X11 apps through
+  XWayland. No OpenSSL and no GPU driver are needed.
 
 ```sh
 cargo build --release
@@ -64,51 +62,13 @@ dependencies (the software renderer is unusably slow otherwise), so the first bu
 takes a few minutes. `cargo run -- --preset light` (or `dark`) forces the bundled
 Breeze colours instead of the live KDE scheme.
 
-The About, Settings and confirmation dialogs are real windows with server-side
-decorations. iced 0.14 cannot mark a window as a child of another, so KDE shows each
-open dialog in the taskbar, and on Wayland KWin chooses where it opens (see the optional
-KWin rule below).
-
-### Optional: KWin rule for the dialogs
-
-On KDE Plasma a window rule can hide the dialogs from the taskbar and pager, keep them in
-front, and centre them. Either create it in **System Settings → Window Management →
-Window Rules → Add New…**:
-
-| Property | Value |
-|----------|-------|
-| Window class (application) | Substring match: `protonctx` |
-| Window title | Regular expression: `^(About protonctx\|Settings\|Launch Error\|Delete Shader Cache)$` |
-| Skip taskbar | Force, Yes |
-| Skip pager | Force, Yes |
-| Keep above other windows | Force, Yes |
-| Initial placement | Force, Centered |
-
-or save the following as `protonctx-dialogs.kwinrule` and load it with **Import…** in the
-same settings page:
-
-```ini
-[protonctx dialogs]
-Description=protonctx dialogs
-wmclass=protonctx
-wmclassmatch=2
-wmclasscomplete=false
-title=^(About protonctx|Settings|Launch Error|Delete Shader Cache)$
-titlematch=3
-skiptaskbar=true
-skiptaskbarrule=2
-skippager=true
-skippagerrule=2
-above=true
-aboverule=2
-placement=5
-placementrule=2
-```
-
-The class match is a substring so it covers both the native build (`protonctx`) and the
-Flatpak (`io.github.l_raider.protonctx`); the title list keeps the main window
-untouched. *Keep above* puts a dialog in front of all windows, not only protonctx's,
-for as long as it is open.
+protonctx runs as an X11 client (XWayland on a Plasma Wayland session, which Plasma 6.8
+keeps after dropping the X11 session). iced 0.14 cannot make one window the child of
+another on Wayland, but on X11 that is a window property: the About, Settings and
+confirmation dialogs are marked transient for the main window (`WM_TRANSIENT_FOR`,
+dialog type, modal), so they stay off the taskbar, open centred on the main window and
+stay above it, like Qt dialogs. With fractional display scaling, sharpness follows
+KWin's *Legacy X11 App Scaling* setting.
 
 ### Keyboard shortcuts
 
