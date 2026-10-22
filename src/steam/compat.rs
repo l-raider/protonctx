@@ -166,16 +166,24 @@ pub fn compat_tool_map(steam_root: &Path) -> Result<HashMap<String, String>, Ste
 }
 
 /// Resolve an app's compatibility tool name, falling back to Steam's global
-/// default tool when the app has no explicit per-app override.
+/// default tool when the app has no explicit per-app override but does have a
+/// Proton prefix.
 ///
 /// Steam records the globally-selected default tool under the `"0"` key of
 /// `config.vdf`'s `CompatToolMapping` (the same map [`compat_tool_map`] returns), so a
 /// game that inherits the Steam-wide default is reported with its actual tool rather
 /// than an empty name — which would otherwise make the "Compatibility Tool" column
 /// wrong and force `proton_dir` onto the (documented-stale) `config_info` fallback.
-pub fn compat_tool_for_app(map: &HashMap<String, String>, app_id: u32) -> String {
+///
+/// That default is "Steam Play for all other titles": Steam applies it only to titles
+/// without a native Linux build. No VDF says which titles are native, so `has_prefix`
+/// (whether `steamapps/compatdata/<app_id>` exists) stands in for "this game runs
+/// under Proton". Without it, a native game would show the default tool, and a Wine
+/// tool launched for it would create a brand-new prefix instead of reporting that the
+/// game has none. A per-app mapping always wins.
+pub fn compat_tool_for_app(map: &HashMap<String, String>, app_id: u32, has_prefix: bool) -> String {
     map.get(&app_id.to_string())
-        .or_else(|| map.get("0"))
+        .or_else(|| has_prefix.then(|| map.get("0")).flatten())
         .cloned()
         .unwrap_or_default()
 }
@@ -571,7 +579,20 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("0".to_string(), "proton_experimental".to_string());
 
-        assert_eq!(compat_tool_for_app(&map, 274190), "proton_experimental");
+        assert_eq!(
+            compat_tool_for_app(&map, 274190, true),
+            "proton_experimental"
+        );
+    }
+
+    #[test]
+    fn compat_tool_skips_global_default_without_a_prefix() {
+        // A native Linux game has no prefix, and Steam does not apply the
+        // "all other titles" default to it.
+        let mut map = HashMap::new();
+        map.insert("0".to_string(), "proton_experimental".to_string());
+
+        assert_eq!(compat_tool_for_app(&map, 274190, false), "");
     }
 
     #[test]
@@ -580,13 +601,17 @@ mod tests {
         map.insert("0".to_string(), "proton_experimental".to_string());
         map.insert("274190".to_string(), "proton_hotfix".to_string());
 
-        assert_eq!(compat_tool_for_app(&map, 274190), "proton_hotfix");
-        assert_eq!(compat_tool_for_app(&map, 730), "proton_experimental");
+        assert_eq!(compat_tool_for_app(&map, 274190, true), "proton_hotfix");
+        assert_eq!(compat_tool_for_app(&map, 730, true), "proton_experimental");
+        // A per-app override applies whether or not a prefix exists yet.
+        assert_eq!(compat_tool_for_app(&map, 274190, false), "proton_hotfix");
+        assert_eq!(compat_tool_for_app(&map, 730, false), "");
     }
 
     #[test]
     fn compat_tool_empty_when_no_mapping() {
         let map: HashMap<String, String> = HashMap::new();
-        assert_eq!(compat_tool_for_app(&map, 274190), "");
+        assert_eq!(compat_tool_for_app(&map, 274190, true), "");
+        assert_eq!(compat_tool_for_app(&map, 274190, false), "");
     }
 }

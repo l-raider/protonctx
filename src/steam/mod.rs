@@ -167,7 +167,10 @@ pub fn discover_games() -> Result<Discovery, SteamError> {
                 continue;
             }
 
-            let compat_tool = compat::compat_tool_for_app(&compat_tools, app.app_id);
+            // Steam's global default tool only covers games without a native
+            // build; an existing prefix is the sign a game runs under Proton.
+            let has_prefix = paths::app_compatdata_dir(library, app.app_id).is_dir();
+            let compat_tool = compat::compat_tool_for_app(&compat_tools, app.app_id, has_prefix);
 
             // Resolve the Proton directory for this game. The *selected* tool (from
             // config.vdf CompatToolMapping) is authoritative: it is what the row shows and
