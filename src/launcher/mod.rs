@@ -62,26 +62,43 @@ pub fn launch_tool(game: &Game, tool: &str) -> Result<LaunchedProcess, LaunchErr
     proton::run_in_prefix(game, &[tool], None)
 }
 
-/// Run an executable the user picked in `game`'s prefix, from the executable's own
-/// folder.
+/// An executable the user picked, resolved for a launch: the path the host sees,
+/// and the folder to start in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Executable {
+    pub host_path: PathBuf,
+    pub cwd: Option<PathBuf>,
+}
+
+/// Resolve a picked executable for [`run_executable`].
 ///
 /// Windows launchers (Explorer, Steam) start a program in its own folder, and many
 /// trainers, mod managers and installers open their files by relative path, so the
 /// launch does the same. When the folder cannot be seen the launch still goes ahead,
 /// from protonctx's own working directory.
 ///
-/// Inside a Flatpak sandbox `exe` may be a document-portal alias; it is resolved to
-/// its host path first (see [`crate::flatpak::resolve_host_path`]), since the command
-/// runs on the host.
-pub fn run_executable(game: &Game, exe: &Path) -> Result<LaunchedProcess, LaunchError> {
-    let host_exe = if crate::flatpak::running_in_flatpak() {
-        crate::flatpak::resolve_host_path(&exe.to_string_lossy())
-            .map_or_else(|| exe.to_path_buf(), PathBuf::from)
+/// Inside a Flatpak sandbox `picked` may be a document-portal alias; it is resolved to
+/// its host path (see [`crate::flatpak::resolve_host_path`]), since the command runs
+/// on the host. That asks the host and can take seconds, so this **blocks**: call it
+/// off the UI thread.
+pub fn resolve_executable(picked: &Path) -> Executable {
+    let host_path = if crate::flatpak::running_in_flatpak() {
+        crate::flatpak::resolve_host_path(&picked.to_string_lossy())
+            .map_or_else(|| picked.to_path_buf(), PathBuf::from)
     } else {
-        exe.to_path_buf()
+        picked.to_path_buf()
     };
-    let cwd = working_dir(exe, &host_exe);
-    proton::run_in_prefix(game, &[&host_exe.to_string_lossy()], cwd)
+    let cwd = working_dir(picked, &host_path).map(Path::to_path_buf);
+    Executable { host_path, cwd }
+}
+
+/// Run a resolved executable in `game`'s prefix.
+pub fn run_executable(game: &Game, exe: &Executable) -> Result<LaunchedProcess, LaunchError> {
+    proton::run_in_prefix(
+        game,
+        &[&exe.host_path.to_string_lossy()],
+        exe.cwd.as_deref(),
+    )
 }
 
 /// The working directory for a picked executable: the folder of `host_exe` (the path
@@ -110,6 +127,27 @@ mod tests {
         assert_eq!(
             working_dir(&picked, host),
             Some(Path::new("/mnt/games/Trainer"))
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_host_pick_resolves_to_itself_and_its_folder() {
+        // Outside a sandbox nothing needs resolving.
+        if crate::flatpak::running_in_flatpak() {
+            return;
+        }
+        let dir = crate::test_support::temp_dir("resolve_executable");
+        std::fs::create_dir_all(&dir).unwrap();
+        let picked = dir.join("trainer.exe");
+
+        assert_eq!(
+            resolve_executable(&picked),
+            Executable {
+                host_path: picked.clone(),
+                cwd: Some(dir.clone()),
+            }
         );
 
         std::fs::remove_dir_all(&dir).ok();

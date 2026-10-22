@@ -20,7 +20,12 @@
 //! unusual installation. Outside a sandbox neither is present.
 
 use std::path::PathBuf;
+use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+/// How long a host query (the document portal) may take before it is given up.
+const HOST_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Whether the process is running inside a Flatpak sandbox.
 ///
@@ -137,12 +142,11 @@ fn desktop_entry_installed(id: &str) -> bool {
 /// # Threading
 ///
 /// This performs a **blocking** subprocess call (`flatpak-spawn --host flatpak
-/// document-info`) and is invoked from [`crate::launcher::run_executable`],
-/// which runs on the GUI thread. Non-document paths return early without spawning
-/// anything, so only a launch whose argument is a document-portal alias pays the
-/// cost; that case can stall the UI for the duration of the host round-trip, and
-/// there is no timeout (std's `Command` has none). If this becomes noticeable,
-/// resolve the path on the worker thread used for launches instead.
+/// document-info`), so call it off the UI thread: [`crate::launcher::resolve_executable`]
+/// runs on a worker. Non-document paths return early without spawning anything. The
+/// call gives up after [`HOST_QUERY_TIMEOUT`], so a hung host D-Bus or portal costs
+/// the fallback path, not a stuck launch; `--watch-bus` asks the host to end the
+/// query when the killed `flatpak-spawn` goes away.
 pub fn resolve_host_path(path: &str) -> Option<String> {
     if !is_doc_path(path) {
         return None;
@@ -150,23 +154,49 @@ pub fn resolve_host_path(path: &str) -> Option<String> {
 
     // The document portal lives on the host, so resolve there via
     // `flatpak-spawn --host`.
-    let output = std::process::Command::new("flatpak-spawn")
-        .arg("--host")
-        .arg("flatpak")
-        .arg("document-info")
-        .arg(path)
-        .output()
-        .ok()?;
+    let mut cmd = Command::new("flatpak-spawn");
+    cmd.args(["--host", "--watch-bus", "flatpak", "document-info"])
+        .arg(path);
+    let output = output_within(cmd, HOST_QUERY_TIMEOUT)?;
     if !output.status.success() {
         return None;
     }
+    document_origin(&String::from_utf8_lossy(&output.stdout))
+}
 
-    // `flatpak document-info` prints an `origin: <real path>` line.
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout
-        .lines()
+/// The real path in `flatpak document-info` output: its `origin: <path>` line.
+fn document_origin(info: &str) -> Option<String> {
+    info.lines()
         .find_map(|line| line.strip_prefix("origin: "))
         .map(|origin| origin.trim().to_string())
+}
+
+/// Run `cmd` and collect its stdout, or kill it and return `None` once
+/// `timeout` passes (std's `Command` has no timeout of its own). Meant for
+/// commands with short output: stdout is read only after the exit, so output
+/// beyond a pipe buffer would stall the command until the timeout.
+fn output_within(mut cmd: Command, timeout: Duration) -> Option<Output> {
+    /// How often the child is checked for an exit.
+    const POLL: Duration = Duration::from_millis(10);
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 /// Whether `path` is a document-portal alias (`/run/user/<uid>/doc/<docid>/...`).
@@ -207,6 +237,37 @@ mod tests {
         assert!(!is_doc_path("/run/user/1000/foo/trainer.exe"));
         assert!(!is_doc_path("/home/user/trainer.exe"));
         assert!(!is_doc_path("/run/other/1000/doc/x"));
+    }
+
+    #[test]
+    fn document_origin_reads_the_origin_line() {
+        let info = "id: O9IM4y7CjO949_dSnoxh2g\n\
+                    path: /run/user/1000/doc/O9IM4y7CjO949_dSnoxh2g/trainer.exe\n\
+                    origin: /mnt/games/Trainer/trainer.exe\n\
+                    permissions:\n";
+        assert_eq!(
+            document_origin(info).as_deref(),
+            Some("/mnt/games/Trainer/trainer.exe")
+        );
+        assert_eq!(document_origin("id: x\n"), None);
+    }
+
+    #[test]
+    fn output_within_returns_output_of_a_quick_command() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo 'origin: /x'"]);
+        let output = output_within(cmd, Duration::from_secs(10)).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"origin: /x\n");
+    }
+
+    #[test]
+    fn output_within_gives_up_on_a_hung_command() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let started = Instant::now();
+        assert!(output_within(cmd, Duration::from_millis(50)).is_none());
+        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]

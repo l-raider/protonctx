@@ -17,10 +17,12 @@ finish-args:
   # presents through shared memory.
   # Read-only access to $HOME so protonctx can read the Steam vdf files
   # (libraryfolders.vdf, config.vdf, appmanifest_*.acf) that live under
-  # ~/.local/share/Steam and ~/.steam/.
+  # ~/.local/share/Steam and ~/.steam/. The one write, deleting a shader
+  # cache, runs on the host through flatpak-spawn instead.
   - --filesystem=home:ro
-  # Required for the planned flatpak-spawn support: lets the app talk to the
-  # org.freedesktop.Flatpak D-Bus interface to spawn processes on the host.
+  # Lets the app talk to the org.freedesktop.Flatpak D-Bus interface to run
+  # commands on the host (flatpak-spawn --host): Proton launches,
+  # document-portal lookups and shader-cache deletion.
   - --talk-name=org.freedesktop.Flatpak
 
 build-options:

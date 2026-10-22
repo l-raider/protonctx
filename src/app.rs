@@ -329,11 +329,11 @@ impl App {
         let me = self.me.clone();
         let _ = slint::spawn_local(async move {
             let outcome = background::pick_executable(initial_dir).await;
-            with_app(&me, |app| app.browse_finished(outcome, &game));
+            with_app(&me, |app| app.browse_finished(outcome, game));
         });
     }
 
-    fn browse_finished(&mut self, outcome: BrowseOutcome, game: &crate::models::Game) {
+    fn browse_finished(&mut self, outcome: BrowseOutcome, game: crate::models::Game) {
         self.state.browsing = false;
         match outcome {
             BrowseOutcome::Picked(path) => {
@@ -343,7 +343,7 @@ impl App {
                 {
                     eprintln!("protonctx: failed to save last directory: {error}");
                 }
-                self.launch_browsed(&path, game);
+                self.launch_browsed(path, game);
             }
             BrowseOutcome::Nothing => {}
             BrowseOutcome::Failed(error) => {
@@ -352,15 +352,35 @@ impl App {
         }
     }
 
-    /// Run a picked executable in `game`'s prefix.
-    fn launch_browsed(&mut self, path: &Path, game: &crate::models::Game) {
-        match crate::launcher::run_executable(game, path) {
-            Ok(process) => self.start_launch(
-                process,
-                format!("Running {} in {}...", path.display(), game.name),
-            ),
-            Err(error) => self.show_error(format!("Failed to launch: {error}")),
+    /// Run a picked executable in `game`'s prefix. Resolving the pick can ask
+    /// the host's document portal and block, so it runs on a worker thread;
+    /// the launch itself happens back on the UI thread.
+    fn launch_browsed(&mut self, path: PathBuf, game: crate::models::Game) {
+        let status = format!("Running {} in {}...", path.display(), game.name);
+        let (sender, receiver) = async_channel::bounded(1);
+        let spawned = std::thread::Builder::new()
+            .name("resolve-executable".to_string())
+            .spawn(move || {
+                let _ = sender.send_blocking(crate::launcher::resolve_executable(&path));
+            });
+        if let Err(error) = spawned {
+            self.show_error(format!(
+                "Failed to launch: could not start a thread ({error})"
+            ));
+            return;
         }
+        let me = self.me.clone();
+        let _ = slint::spawn_local(async move {
+            let Ok(exe) = receiver.recv().await else {
+                return;
+            };
+            with_app(&me, |app| {
+                match crate::launcher::run_executable(&game, &exe) {
+                    Ok(process) => app.start_launch(process, status),
+                    Err(error) => app.show_error(format!("Failed to launch: {error}")),
+                }
+            });
+        });
     }
 
     /// Write non-empty `text` to the clipboard.

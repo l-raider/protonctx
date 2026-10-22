@@ -52,6 +52,12 @@ pub fn shader_cache_dir_for(library: &Path, app_id: u32) -> PathBuf {
 /// guard, so deleting through the link could reach any directory. With the
 /// link gone Steam recreates a real cache directory, which is what "delete the
 /// cache" means to it.
+///
+/// # Flatpak
+///
+/// The sandbox sees `$HOME` read-only, so inside it the checks above still run
+/// here but the removal runs on the host through `flatpak-spawn --host rm`, the
+/// same way launches run there (see [`host_delete_command`]).
 pub fn delete_shader_cache(library: &Path, app_id: u32) -> std::io::Result<bool> {
     let dir = shader_cache_dir_for(library, app_id);
 
@@ -65,11 +71,44 @@ pub fn delete_shader_cache(library: &Path, app_id: u32) -> std::io::Result<bool>
         ));
     }
 
-    match CacheLeaf::of(&dir)? {
-        CacheLeaf::Missing | CacheLeaf::Other => Ok(false),
-        CacheLeaf::Link => std::fs::remove_file(&dir).map(|()| true),
-        CacheLeaf::Dir => std::fs::remove_dir_all(&dir).map(|()| true),
+    match (CacheLeaf::of(&dir)?, crate::flatpak::running_in_flatpak()) {
+        (CacheLeaf::Missing | CacheLeaf::Other, _) => Ok(false),
+        (leaf, true) => run_on_host(host_delete_command(&dir, leaf)).map(|()| true),
+        (CacheLeaf::Link, false) => std::fs::remove_file(&dir).map(|()| true),
+        (CacheLeaf::Dir, false) => std::fs::remove_dir_all(&dir).map(|()| true),
     }
+}
+
+/// The `flatpak-spawn --host rm` command that removes a checked cache path on
+/// the host: a link with `rm -f` (`rm` never follows the link it is given), a
+/// directory with `rm -rf --one-file-system`, which also refuses to cross into
+/// anything mounted inside the cache. `--` keeps the path from being read as an
+/// option.
+fn host_delete_command(dir: &Path, leaf: CacheLeaf) -> std::process::Command {
+    let mut cmd = std::process::Command::new("flatpak-spawn");
+    cmd.args(["--host", "rm"]);
+    if leaf == CacheLeaf::Link {
+        cmd.arg("-f");
+    } else {
+        cmd.args(["-rf", "--one-file-system"]);
+    }
+    cmd.arg("--").arg(dir);
+    cmd
+}
+
+/// Run a host command to completion, turning a failed exit into an error that
+/// carries its stderr.
+fn run_on_host(mut cmd: std::process::Command) -> std::io::Result<()> {
+    let output = cmd.stdin(std::process::Stdio::null()).output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(std::io::Error::other(format!(
+        "removing on the host failed ({}): {}",
+        output.status,
+        stderr.trim()
+    )))
 }
 
 /// What sits at a shader-cache path, read without following a symlink at the
@@ -267,6 +306,46 @@ mod tests {
         assert!(!delete_shader_cache(&root, 274190).unwrap());
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn host_delete_removes_a_directory_without_crossing_mounts() {
+        let dir = Path::new("/home/u/.local/share/Steam/steamapps/shadercache/274190");
+        let cmd = host_delete_command(dir, CacheLeaf::Dir);
+        assert_eq!(cmd.get_program(), "flatpak-spawn");
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            [
+                "--host",
+                "rm",
+                "-rf",
+                "--one-file-system",
+                "--",
+                dir.to_str().unwrap()
+            ]
+        );
+    }
+
+    #[test]
+    fn host_delete_removes_a_link_as_a_link() {
+        let dir = Path::new("/home/u/.local/share/Steam/steamapps/shadercache/274190");
+        let cmd = host_delete_command(dir, CacheLeaf::Link);
+        assert_eq!(
+            cmd.get_args().collect::<Vec<_>>(),
+            ["--host", "rm", "-f", "--", dir.to_str().unwrap()]
+        );
+    }
+
+    #[test]
+    fn host_command_failure_carries_stderr() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "echo 'Permission denied' >&2; exit 1"]);
+        let error = run_on_host(cmd).unwrap_err();
+        assert!(error.to_string().contains("Permission denied"), "{error}");
+
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "exit 0"]);
+        assert!(run_on_host(cmd).is_ok());
     }
 
     #[test]
