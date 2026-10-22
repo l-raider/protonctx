@@ -174,7 +174,7 @@ pub fn outline_button<'a>(
     leading: Option<Icon>,
     on_press: Option<Message>,
     default_focus: bool,
-) -> button::Button<'a, Message> {
+) -> Element<'a, Message> {
     let t = tokens();
     let icon_width = if leading.is_some() {
         t.font_size + ICON_GAP
@@ -186,7 +186,7 @@ pub fn outline_button<'a>(
     let width = (content_width + 2.0 * BUTTON_PADDING_X)
         .ceil()
         .max(BUTTON_MIN_WIDTH);
-    button(
+    let button = button(
         iced::widget::container(icon_label(leading, text_value))
             .width(Length::Fill)
             .height(Length::Fill)
@@ -199,7 +199,8 @@ pub fn outline_button<'a>(
     .style(move |_theme: &Theme, status| {
         outline_style(effective_status(status, enabled), default_focus)
     })
-    .on_press_maybe(on_press)
+    .on_press_maybe(on_press);
+    arrow_cursor(button)
 }
 
 /// The outline button's appearance in `status`.
@@ -253,7 +254,7 @@ pub fn toolbar_button<'a>(
     content: impl Into<Element<'a, Message>>,
     padding_x: f32,
     on_press: Option<Message>,
-) -> button::Button<'a, Message> {
+) -> Element<'a, Message> {
     let t = tokens();
     let height = t.rem(8.0);
     let mut inner = iced::widget::container(content)
@@ -263,11 +264,139 @@ pub fn toolbar_button<'a>(
         inner = inner.width(height).align_x(iced::Alignment::Center);
     }
     let enabled = on_press.is_some();
-    button(inner)
-        .height(height)
-        .padding([0.0, padding_x])
-        .on_press_maybe(on_press)
-        .style(move |_theme: &Theme, status| toolbar_style(effective_status(status, enabled)))
+    arrow_cursor(
+        button(inner)
+            .height(height)
+            .padding([0.0, padding_x])
+            .on_press_maybe(on_press)
+            .style(move |_theme: &Theme, status| toolbar_style(effective_status(status, enabled))),
+    )
+}
+
+/// Wraps `content` so it never asks for the pointing-hand cursor.
+///
+/// iced's buttons and checkboxes request `Interaction::Pointer` while
+/// hovered and offer no setting for it; Qt and KDE keep the arrow over
+/// push buttons, menu items and check boxes, so the wrapper turns that
+/// request into "no preference" (the default arrow). Everything else is
+/// delegated unchanged, and the wrapper is transparent in the widget tree.
+pub fn arrow_cursor<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    Element::new(ArrowCursor {
+        content: content.into(),
+    })
+}
+
+struct ArrowCursor<'a> {
+    content: Element<'a, Message>,
+}
+
+impl Widget<Message, Theme, iced::Renderer> for ArrowCursor<'_> {
+    fn size(&self) -> Size<Length> {
+        self.content.as_widget().size()
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        self.content.as_widget().size_hint()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &iced::Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.content.as_widget_mut().layout(tree, renderer, limits)
+    }
+
+    fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut iced::Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.content
+            .as_widget()
+            .draw(tree, renderer, theme, style, layout, cursor, viewport);
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        self.content.as_widget().tag()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        self.content.as_widget().state()
+    }
+
+    fn children(&self) -> Vec<widget::Tree> {
+        self.content.as_widget().children()
+    }
+
+    fn diff(&self, tree: &mut widget::Tree) {
+        self.content.as_widget().diff(tree);
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &iced::Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.content
+            .as_widget_mut()
+            .operate(tree, layout, renderer, operation);
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &iced::Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &iced::Renderer,
+        clipboard: &mut dyn iced::advanced::Clipboard,
+        shell: &mut iced::advanced::Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.content.as_widget_mut().update(
+            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &iced::Renderer,
+    ) -> mouse::Interaction {
+        match self
+            .content
+            .as_widget()
+            .mouse_interaction(tree, layout, cursor, viewport, renderer)
+        {
+            mouse::Interaction::Pointer => mouse::Interaction::None,
+            interaction => interaction,
+        }
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &iced::Renderer,
+        viewport: &Rectangle,
+        translation: iced::Vector,
+    ) -> Option<iced::advanced::overlay::Element<'b, Message, Theme, iced::Renderer>> {
+        self.content
+            .as_widget_mut()
+            .overlay(tree, layout, renderer, viewport, translation)
+    }
 }
 
 /// The toolbar button's appearance in `status`.
@@ -416,4 +545,52 @@ pub fn elide(content: &str, max_width: f32, font: iced::Font, size: f32) -> Stri
         .trim_end()
         .to_string()
         + ELLIPSIS
+}
+
+#[cfg(test)]
+mod tests {
+    use iced::{Element, Event, Point, Size, mouse};
+    use iced_runtime::user_interface::{self, UserInterface};
+
+    use crate::app::Message;
+
+    /// The cursor `element` asks for with the pointer at `position`.
+    fn cursor_over(element: Element<'_, Message>, position: Point) -> mouse::Interaction {
+        let mut renderer = iced::Renderer::new(iced::Font::DEFAULT, 16.into());
+        let mut ui = UserInterface::build(
+            element,
+            Size::new(200.0, 100.0),
+            user_interface::Cache::default(),
+            &mut renderer,
+        );
+        let mut messages = Vec::new();
+        let (state, _) = ui.update(
+            &[Event::Mouse(mouse::Event::CursorMoved { position })],
+            mouse::Cursor::Available(position),
+            &mut renderer,
+            &mut iced::advanced::clipboard::Null,
+            &mut messages,
+        );
+        match state {
+            user_interface::State::Updated {
+                mouse_interaction, ..
+            } => mouse_interaction,
+            user_interface::State::Outdated => mouse::Interaction::None,
+        }
+    }
+
+    #[test]
+    fn buttons_keep_the_arrow_cursor() {
+        let over = Point::new(10.0, 10.0);
+        // iced's own button asks for the pointing hand...
+        let plain: Element<'_, Message> = iced::widget::button("Refresh")
+            .on_press(Message::Refresh)
+            .into();
+        assert_eq!(cursor_over(plain, over), mouse::Interaction::Pointer);
+        // ...the app's buttons keep the default arrow, like Qt.
+        let outline = super::outline_button("Explorer", None, Some(Message::Refresh), false);
+        assert_eq!(cursor_over(outline, over), mouse::Interaction::None);
+        let toolbar = super::toolbar_button(super::label("Refresh"), 10.0, Some(Message::Refresh));
+        assert_eq!(cursor_over(toolbar, over), mouse::Interaction::None);
+    }
 }

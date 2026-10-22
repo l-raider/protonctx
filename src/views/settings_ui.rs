@@ -13,16 +13,17 @@ use crate::views::widgets::faded;
 
 pub fn body<'a>(remember_last_dir: bool) -> Element<'a, Message> {
     let t = tokens();
-    checkbox(remember_last_dir)
-        .label("Remember last used directory")
-        .on_toggle(Message::RememberLastDir)
-        // gpui's checkbox: a 1 rem box, 0.5 rem from its label.
-        .size(t.font_size.round())
-        .spacing(t.rem(2.0))
-        .text_size(t.font_size)
-        .font(t.font)
-        .style(|_theme: &Theme, status| checkbox_style(status))
-        .into()
+    crate::views::widgets::arrow_cursor(
+        checkbox(remember_last_dir)
+            .label("Remember last used directory")
+            .on_toggle(Message::RememberLastDir)
+            // gpui's checkbox: a 1 rem box, 0.5 rem from its label.
+            .size(t.font_size.round())
+            .spacing(t.rem(2.0))
+            .text_size(t.font_size)
+            .font(t.font)
+            .style(|_theme: &Theme, status| checkbox_style(status)),
+    )
 }
 
 /// A solid `primary` box with a `primary_foreground` check when checked; the

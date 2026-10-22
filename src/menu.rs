@@ -38,17 +38,20 @@ fn item<'a>(
         None => label(text).into(),
     };
     let enabled = on_press.is_some();
-    button(
-        container(content)
-            .height(Length::Fill)
-            .align_y(Alignment::Center),
+    widgets::arrow_cursor(
+        button(
+            container(content)
+                .height(Length::Fill)
+                .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .height(ITEM_HEIGHT)
+        .padding([0, 8])
+        .on_press_maybe(on_press)
+        .style(move |_theme: &Theme, status| {
+            item_style(widgets::effective_status(status, enabled))
+        }),
     )
-    .width(Length::Fill)
-    .height(ITEM_HEIGHT)
-    .padding([0, 8])
-    .on_press_maybe(on_press)
-    .style(move |_theme: &Theme, status| item_style(widgets::effective_status(status, enabled)))
-    .into()
 }
 
 /// Menu items are flat; hovering tints them with the selection at 0.3.

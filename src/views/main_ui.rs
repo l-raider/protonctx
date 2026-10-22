@@ -127,7 +127,7 @@ fn table_pane(state: &State) -> Element<'_, Message> {
 fn action_row(state: &State) -> Element<'_, Message> {
     let enabled = state.selected.is_some();
     let action = |text: &'static str, message: Message| {
-        widgets::outline_button(text, None, enabled.then_some(message), false).into()
+        widgets::outline_button(text, None, enabled.then_some(message), false)
     };
     let mut buttons: Vec<Element<'_, Message>> = vec![action("Browse...", Message::Browse)];
     buttons.extend(

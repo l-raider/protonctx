@@ -3145,7 +3145,6 @@ dependencies = [
  "chrono",
  "iced",
  "iced_aw",
- "iced_runtime",
  "iced_table2",
  "iced_test",
  "native-theme",

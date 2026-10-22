@@ -54,6 +54,8 @@ native-theme = { version = "0.6.1", default-features = false, features = ["linux
 
 [dev-dependencies]
 iced_test = "0.14"
+# `UserInterface`, to assert the cursor a hovered widget asks for.
+iced_runtime = "0.14"
 
 [profile.publicrelease]
 inherits = "release"
