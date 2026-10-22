@@ -15,9 +15,9 @@ use super::paths;
 /// Built-in tools (e.g. `"proton_experimental"`) are Steam apps like any other: they
 /// install into a library's `steamapps/common/` with the *display* name as directory
 /// name (e.g. `Proton - Experimental`), in whichever library is the default, which is
-/// not always the Steam root. The internal name is the lowercased, underscore-joined
-/// display name without spaces ("Proton Experimental" → `proton_experimental`). The
-/// appmanifests carry this mapping (`name` ↔ `installdir`), so we use them — see
+/// not always the Steam root. The internal name is derived from the display name
+/// ("Proton Experimental" → `proton_experimental`, "Proton 9.0" → `proton_9`; see
+/// [`builtin_internal_name`]). The appmanifests carry this mapping (`name` ↔ `installdir`), so we use them — see
 /// [`builtin_tool_dirs`]. Custom tools (e.g. `"GE-Proton10-34"`) live under
 /// `<steam_root>/compatibilitytools.d/` and use the internal name as their directory
 /// name, so the path check succeeds immediately.
@@ -105,16 +105,49 @@ fn parse_builtin_appmanifest(path: &Path) -> Option<(String, String)> {
         return None;
     }
 
-    // "Proton Experimental" → "proton_experimental"
-    let internal = state
-        .name
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join("_")
-        .to_lowercase();
-
+    let internal = builtin_internal_name(&state.name);
     let install_dir = state.install_dir.filter(|dir| !dir.is_empty())?;
     Some((internal, install_dir))
+}
+
+/// Steam's internal compat-tool name for a built-in Proton's manifest `name`.
+///
+/// Numbered releases drop the dot, and a `.0` minor entirely: "Proton 9.0" →
+/// `proton_9`, "Proton 6.3" → `proton_63`, "Proton 5.13" → `proton_513`. A build
+/// number ("-4") and labels such as "(Beta)" are not part of the name, except the
+/// ARM64 build, which Steam keeps apart: "Proton 11.0 (ARM64)" → `proton_11-arm64`.
+/// Named releases join their lowercased words: "Proton Experimental" →
+/// `proton_experimental`.
+fn builtin_internal_name(name: &str) -> String {
+    let mut words = name.split_whitespace();
+    if words.next() == Some("Proton")
+        && let Some(version) = words.next()
+        && let Some(id) = numbered_release_id(version)
+    {
+        let arm64 = words.any(|word| word.eq_ignore_ascii_case("(ARM64)"));
+        return format!("proton_{id}{}", if arm64 { "-arm64" } else { "" });
+    }
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join("_")
+        .to_lowercase()
+}
+
+/// The id part of a numbered release's internal name, from its version
+/// (`major.minor`, optionally followed by a `-build`): `9.0` → `9`, `6.3-8` →
+/// `63`. `None` when `version` is not numeric.
+fn numbered_release_id(version: &str) -> Option<String> {
+    let version = version.split('-').next().unwrap_or(version);
+    let (major, minor) = version.split_once('.').unwrap_or((version, "0"));
+    let numeric = |part: &str| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit());
+    if !numeric(major) || !numeric(minor) {
+        return None;
+    }
+    Some(if minor.bytes().all(|b| b == b'0') {
+        major.to_string()
+    } else {
+        format!("{major}{minor}")
+    })
 }
 
 /// Load the compatibility tool mapping from Steam's `config.vdf`.
@@ -523,6 +556,55 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn builtin_internal_names_match_steams() {
+        // Steam's own names, as its appinfo cache lists them.
+        for (name, internal) in [
+            ("Proton Experimental", "proton_experimental"),
+            ("Proton Hotfix", "proton_hotfix"),
+            ("Proton 11.0", "proton_11"),
+            ("Proton 10.0", "proton_10"),
+            ("Proton 9.0", "proton_9"),
+            ("Proton 9.0 (Beta)", "proton_9"),
+            ("Proton 8.0", "proton_8"),
+            ("Proton 7.0", "proton_7"),
+            ("Proton 6.3", "proton_63"),
+            ("Proton 5.13", "proton_513"),
+            ("Proton 5.0", "proton_5"),
+            ("Proton 4.11", "proton_411"),
+            ("Proton 4.2", "proton_42"),
+            ("Proton 3.16", "proton_316"),
+            ("Proton 3.7", "proton_37"),
+            ("Proton 10.0-4", "proton_10"),
+            ("Proton 11.0 (ARM64)", "proton_11-arm64"),
+        ] {
+            assert_eq!(builtin_internal_name(name), internal, "{name}");
+        }
+    }
+
+    #[test]
+    fn resolves_numbered_builtin_releases() {
+        // A game mapped to a numbered release must resolve to its install dir,
+        // not fall back to the prefix's (possibly stale) recorded tool.
+        let root = crate::test_support::temp_dir("tool_numbered");
+        let steamapps = root.join("steamapps");
+        write_builtin_appmanifest(
+            &steamapps,
+            "Proton 9.0 (Beta)",
+            "Proton 9.0 (Beta)",
+            2805730,
+        );
+        write_builtin_appmanifest(&steamapps, "Proton 6.3", "Proton 6.3", 1580130);
+        let p9 = mk_common(&root, "Proton 9.0 (Beta)");
+        let p63 = mk_common(&root, "Proton 6.3");
+
+        let map = builtin_tool_dirs(std::slice::from_ref(&root));
+        assert_eq!(proton_dir_for_tool(&root, &map, "proton_9"), Some(p9));
+        assert_eq!(proton_dir_for_tool(&root, &map, "proton_63"), Some(p63));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
