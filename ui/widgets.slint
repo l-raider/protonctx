@@ -101,7 +101,8 @@ export component ToolbarButton {
     }
 
     height: Theme.rem(8);
-    min-width: root.text == "" ? self.height : content.preferred-width + 2 * root.padding-x;
+    // `content` already includes `padding-x` on both sides.
+    min-width: root.text == "" ? self.height : content.preferred-width;
     preferred-width: self.min-width;
     horizontal-stretch: 0;
 
@@ -127,6 +128,8 @@ export component ToolbarButton {
         }
         if root.text != "": Text {
             accessible-role: none;
+            // gpui's text_sm (0.875 rem) in whole pixels, as gpui renders it.
+            font-size: round(Theme.font-size * 0.875 / 1px) * 1px;
             text: root.text;
             vertical-alignment: center;
             color: root.fg;
@@ -142,7 +145,7 @@ export component ToolbarButton {
 }
 
 // One popup-menu item at the theme's base font size; hovering tints it with
-// the selection at 0.3.
+// the selection and outlines it in the selection, as Breeze does.
 export component MenuRow {
     in property <string> text;
     in property <image> icon;
@@ -162,9 +165,12 @@ export component MenuRow {
         }
     }
 
+    property <bool> hot: root.enabled && touch.has-hover;
     Rectangle {
-        border-radius: Theme.radius;
-        background: root.enabled && touch.has-hover ? Theme.accent : transparent;
+        border-radius: 3px;
+        border-width: root.hot ? 1px : 0px;
+        border-color: Theme.menu-hover-border;
+        background: root.hot ? Theme.menu-hover : transparent;
     }
 
     HorizontalLayout {
@@ -213,9 +219,10 @@ export component MenuPanel inherits Rectangle {
     border-radius: Theme.radius;
 }
 
-// A Breeze scrollbar: the window fill as the groove, the text at half alpha
-// as the resting handle, the selection while hovered or dragged. `offset` is
-// the (negative) content offset of the scrolled view.
+// A Breeze scroll bar handle in its lane: the focus colour, faded while idle
+// and hovered, opaque while dragged. The lane itself (fill and separator) is
+// painted by `ScrollArea`. `offset` is the (negative) content offset of the
+// scrolled view.
 export component ScrollBar {
     in property <bool> horizontal: false;
     in property <length> visible-length;
@@ -231,12 +238,8 @@ export component ScrollBar {
     property <length> grab;
 
     Rectangle {
-        background: Theme.scrollbar-track;
-    }
-
-    Rectangle {
-        x: root.horizontal ? root.thumb-start : (parent.width - Theme.scroller-width) / 2;
-        y: root.horizontal ? (parent.height - Theme.scroller-width) / 2 : root.thumb-start;
+        x: root.horizontal ? root.thumb-start : Theme.scrollbar-inset;
+        y: root.horizontal ? Theme.scrollbar-inset : root.thumb-start;
         width: root.horizontal ? root.thumb : Theme.scroller-width;
         height: root.horizontal ? Theme.scroller-width : root.thumb;
         border-radius: Theme.scroller-width / 2;
@@ -264,25 +267,35 @@ export component ScrollBar {
     }
 }
 
-// A scrolled view with Breeze scrollbars that overlay the content's right and
-// bottom edges while it overflows, as gpui's did.
+// A scrolled view whose scroll bars take their own lanes at the right and
+// bottom edges while the content overflows, as Breeze's do: the view fill,
+// a separator line against the content, and the handle.
 export component ScrollArea {
     in property <length> content-width;
     in property <length> content-height;
+    // The narrowest the content can get, for deciding whether the horizontal
+    // lane is needed (the table stretches its last column to the view).
+    in property <length> min-content-width: root.content-width;
     in-out property <length> offset-x <=> flick.content-x;
     in-out property <length> offset-y <=> flick.content-y;
     out property <length> visible-width: flick.width;
     out property <length> visible-height: flick.height;
     callback scrolled();
 
-    property <bool> overflow-x: root.content-width > flick.width + 0.5px;
-    property <bool> overflow-y: root.content-height > flick.height + 0.5px;
+    property <length> lane: Theme.scrollbar-width;
+    property <bool> fits-x: root.min-content-width <= root.width + 0.5px;
+    property <bool> fits-y: root.content-height <= root.height + 0.5px;
+    // One lane can push the other axis into overflow.
+    out property <bool> overflow-y: !root.fits-y
+        || (!root.fits-x && root.content-height > root.height - root.lane + 0.5px);
+    out property <bool> overflow-x: !root.fits-x
+        || (!root.fits-y && root.min-content-width > root.width - root.lane + 0.5px);
 
     flick := Flickable {
         x: 0;
         y: 0;
-        width: parent.width;
-        height: parent.height;
+        width: parent.width - (root.overflow-y ? root.lane : 0px);
+        height: parent.height - (root.overflow-x ? root.lane : 0px);
         content-width: max(root.content-width, self.width);
         content-height: max(root.content-height, self.height);
         @children
@@ -312,16 +325,47 @@ export component ScrollArea {
         root.clamp-offsets();
     }
 
-    // Wheel, flick, scrollbar drag, or a programmatic scroll.
+    // Wheel, flick, scroll bar drag, or a programmatic scroll.
     changed offset-y => {
         root.scrolled();
     }
 
-    if root.overflow-y: ScrollBar {
-        x: parent.width - self.width;
+    // The lanes, each separated from the content by a line along its whole
+    // length (the lines cross in the corner).
+    if root.overflow-y: Rectangle {
+        x: parent.width - root.lane;
         y: 0;
-        width: Theme.scrollbar-width;
-        height: parent.height - (root.overflow-x ? Theme.scrollbar-width : 0px);
+        width: root.lane;
+        height: parent.height;
+        background: Theme.scrollbar-track;
+    }
+    if root.overflow-x: Rectangle {
+        x: 0;
+        y: parent.height - root.lane;
+        width: parent.width;
+        height: root.lane;
+        background: Theme.scrollbar-track;
+    }
+    if root.overflow-y: Rectangle {
+        x: parent.width - root.lane;
+        y: 0;
+        width: 1px;
+        height: parent.height;
+        background: Theme.scrollbar-separator;
+    }
+    if root.overflow-x: Rectangle {
+        x: 0;
+        y: parent.height - root.lane;
+        width: parent.width;
+        height: 1px;
+        background: Theme.scrollbar-separator;
+    }
+
+    if root.overflow-y: ScrollBar {
+        x: parent.width - root.lane;
+        y: 0;
+        width: root.lane;
+        height: flick.height;
         visible-length: flick.height;
         content-length: flick.content-height;
         offset <=> flick.content-y;
@@ -330,9 +374,9 @@ export component ScrollArea {
     if root.overflow-x: ScrollBar {
         horizontal: true;
         x: 0;
-        y: parent.height - self.height;
-        height: Theme.scrollbar-width;
-        width: parent.width - (root.overflow-y ? Theme.scrollbar-width : 0px);
+        y: parent.height - root.lane;
+        width: flick.width;
+        height: root.lane;
         visible-length: flick.width;
         content-length: flick.content-width;
         offset <=> flick.content-x;

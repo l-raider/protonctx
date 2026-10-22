@@ -161,6 +161,27 @@ fn visual_states() {
     );
     pointer(window, 230.0, 33.0 + 28.0 + 28.0 * 2.5 + 70.0);
     save(&adapter, 760, 520, "slint-main-context-menu");
+    click(window, 700.0, 450.0, PointerEventButton::Left);
+
+    // Enough games and log text for both scroll bar lanes in each pane; the
+    // pointer rests on the table's vertical handle.
+    let many: Vec<GameRowData> = std::iter::repeat_with(rows).take(5).flatten().collect();
+    main.set_rows(slint::ModelRc::new(slint::VecModel::from(many)));
+    main.set_selected(-1);
+    let log: String = (0..12)
+        .map(|i| {
+            format!(
+                "[02:57:17.{i:03}] wine: {}\n",
+                "call to unimplemented function ".repeat(4)
+            )
+        })
+        .collect();
+    main.set_log_text(log.into());
+    main.set_log_lines(12);
+    main.invoke_log_appended();
+    save(&adapter, 760, 520, "slint-main-scrollbars");
+    pointer(window, 740.0, 80.0);
+    save(&adapter, 760, 520, "slint-main-scrollbar-hover");
     drop(main);
 
     let dialog = AboutDialog::new().unwrap();

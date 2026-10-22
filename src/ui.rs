@@ -126,13 +126,17 @@ where
 
     g.set_menu_background(c(t.menu_background));
     g.set_menu_foreground(c(t.menu_foreground));
+    g.set_menu_hover(c(t.menu_hover));
+    g.set_menu_hover_border(c(t.menu_hover_border));
 
     g.set_scrollbar_track(c(t.scrollbar_track));
+    g.set_scrollbar_separator(c(t.scrollbar_separator));
     g.set_scrollbar_thumb(c(t.scrollbar_thumb));
     g.set_scrollbar_thumb_hover(c(t.scrollbar_thumb_hover));
     g.set_scrollbar_thumb_active(c(t.scrollbar_thumb_active));
     g.set_scrollbar_width(t.scrollbar_width);
     g.set_scroller_width(t.scroller_width);
+    g.set_scrollbar_inset(t.scrollbar_inset);
     g.set_scrollbar_min_thumb(t.scrollbar_min_thumb);
 
     g.set_font_family(t.font_family.as_str().into());

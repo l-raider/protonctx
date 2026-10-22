@@ -26,9 +26,6 @@ component HeaderCell {
     in property <bool> active;
     in property <bool> descending;
     in property <bool> last;
-    // gpui sized the last column 16 px short (the scrollbar rail) and centred
-    // its title in that width.
-    in property <length> reserve: 0px;
     callback clicked;
 
     accessible-role: button;
@@ -44,7 +41,7 @@ component HeaderCell {
 
     HorizontalLayout {
         padding-left: TableMetrics.cell-padding - 2px;
-        padding-right: TableMetrics.cell-padding - 2px + root.reserve;
+        padding-right: TableMetrics.cell-padding - 2px;
         Text {
             accessible-role: none;
             horizontal-stretch: 1;
@@ -130,11 +127,12 @@ export component GamesTable {
         if root.selected < 0 || root.selected >= root.rows.length {
             return;
         }
+        // Rows show between the pinned header and the bottom of the view.
         let top = root.selected * TableMetrics.row-height;
         if top + body.offset-y < 0 {
             body.offset-y = -top;
-        } else if top + TableMetrics.row-height + body.offset-y > body.visible-height {
-            body.offset-y = body.visible-height - top - TableMetrics.row-height;
+        } else if TableMetrics.header-height + top + TableMetrics.row-height + body.offset-y > body.visible-height {
+            body.offset-y = body.visible-height - TableMetrics.header-height - top - TableMetrics.row-height;
         }
         root.row-context(
             root.selected,
@@ -144,7 +142,8 @@ export component GamesTable {
     }
 
     property <length> inner-width: self.width - 2px;
-    property <length> compat-width: max(TableMetrics.min-compat, root.inner-width - root.name-width - root.app-id-width);
+    // The last column stretches to the view (left of the scroll bar lane).
+    property <length> compat-width: max(TableMetrics.min-compat, body.visible-width - root.name-width - root.app-id-width);
     property <length> total-width: root.name-width + root.app-id-width + root.compat-width;
 
     frame := Rectangle {
@@ -154,86 +153,17 @@ export component GamesTable {
         background: Theme.list-background;
         clip: true;
 
-        // Header, scrolled sideways with the body.
-        Rectangle {
+        body := ScrollArea {
             x: 1px;
             y: 1px;
             width: root.inner-width;
-            height: TableMetrics.header-height;
-            clip: true;
-            background: Theme.header;
-
-            Rectangle {
-                x: body.offset-x;
-                width: root.total-width;
-                height: parent.height;
-
-                HeaderCell {
-                    x: 0;
-                    width: root.name-width;
-                    height: TableMetrics.header-height - 1px;
-                    title: "Game";
-                    active: root.sort-column == 0;
-                    descending: root.sort-descending;
-                    clicked => {
-                        root.header-clicked(0);
-                    }
-                }
-                HeaderCell {
-                    x: root.name-width;
-                    width: root.app-id-width;
-                    height: TableMetrics.header-height - 1px;
-                    title: "App ID";
-                    active: root.sort-column == 1;
-                    descending: root.sort-descending;
-                    clicked => {
-                        root.header-clicked(1);
-                    }
-                }
-                HeaderCell {
-                    x: root.name-width + root.app-id-width;
-                    width: root.compat-width;
-                    height: TableMetrics.header-height - 1px;
-                    title: "Compatibility Tool";
-                    last: true;
-                    reserve: Theme.scrollbar-width;
-                    active: root.sort-column == 2;
-                    descending: root.sort-descending;
-                    clicked => {
-                        root.header-clicked(2);
-                    }
-                }
-
-                ResizeGrip {
-                    x: root.name-width - self.width / 2;
-                    height: TableMetrics.header-height;
-                    column-width <=> root.name-width;
-                }
-                ResizeGrip {
-                    x: root.name-width + root.app-id-width - self.width / 2;
-                    height: TableMetrics.header-height;
-                    column-width <=> root.app-id-width;
-                }
-            }
-
-            // The frame rule under the header.
-            Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: Theme.border;
-            }
-        }
-
-        body := ScrollArea {
-            x: 1px;
-            y: 1px + TableMetrics.header-height;
-            width: root.inner-width;
-            height: parent.height - 2px - TableMetrics.header-height;
+            height: parent.height - 2px;
             content-width: root.total-width;
-            content-height: root.rows.length * TableMetrics.row-height;
+            min-content-width: root.name-width + root.app-id-width + TableMetrics.min-compat;
+            content-height: TableMetrics.header-height + root.rows.length * TableMetrics.row-height;
 
             for row[index] in root.rows: Rectangle {
-                y: index * TableMetrics.row-height;
+                y: TableMetrics.header-height + index * TableMetrics.row-height;
                 width: root.total-width;
                 height: TableMetrics.row-height;
 
@@ -318,5 +248,76 @@ export component GamesTable {
                 }
             }
         }
+
+        // Header, pinned over the top of the body and scrolled sideways with
+        // it; the vertical scroll bar lane runs beside it.
+        Rectangle {
+            x: 1px;
+            y: 1px;
+            width: body.visible-width;
+            height: TableMetrics.header-height;
+            clip: true;
+            background: Theme.header;
+
+            Rectangle {
+                x: body.offset-x;
+                width: root.total-width;
+                height: parent.height;
+
+                HeaderCell {
+                    x: 0;
+                    width: root.name-width;
+                    height: TableMetrics.header-height - 1px;
+                    title: "Game";
+                    active: root.sort-column == 0;
+                    descending: root.sort-descending;
+                    clicked => {
+                        root.header-clicked(0);
+                    }
+                }
+                HeaderCell {
+                    x: root.name-width;
+                    width: root.app-id-width;
+                    height: TableMetrics.header-height - 1px;
+                    title: "App ID";
+                    active: root.sort-column == 1;
+                    descending: root.sort-descending;
+                    clicked => {
+                        root.header-clicked(1);
+                    }
+                }
+                HeaderCell {
+                    x: root.name-width + root.app-id-width;
+                    width: root.compat-width;
+                    height: TableMetrics.header-height - 1px;
+                    title: "Compatibility Tool";
+                    last: true;
+                    active: root.sort-column == 2;
+                    descending: root.sort-descending;
+                    clicked => {
+                        root.header-clicked(2);
+                    }
+                }
+
+                ResizeGrip {
+                    x: root.name-width - self.width / 2;
+                    height: TableMetrics.header-height;
+                    column-width <=> root.name-width;
+                }
+                ResizeGrip {
+                    x: root.name-width + root.app-id-width - self.width / 2;
+                    height: TableMetrics.header-height;
+                    column-width <=> root.app-id-width;
+                }
+            }
+
+            // The frame rule under the header.
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.border;
+            }
+        }
+
     }
 }

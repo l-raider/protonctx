@@ -43,14 +43,22 @@ export global Theme {
     // ---- Menus ----
     in-out property <color> menu-background: #202326;
     in-out property <color> menu-foreground: #fcfcfc;
+    // Hovered menu item: the selection at 0.25, outlined in the selection.
+    in-out property <color> menu-hover: #3daee940;
+    in-out property <color> menu-hover-border: #3daee9;
 
     // ---- Scrollbars ----
-    in-out property <color> scrollbar-track: #202326;
-    in-out property <color> scrollbar-thumb: #fcfcfc80;
-    in-out property <color> scrollbar-thumb-hover: #3daee9;
+    // Breeze lanes: the view fill behind a separator line, and the focus
+    // colour as the handle (faded idle and hovered, opaque while dragged).
+    in-out property <color> scrollbar-track: #141618;
+    in-out property <color> scrollbar-separator: #4d545bb3;
+    in-out property <color> scrollbar-thumb: #3daee966;
+    in-out property <color> scrollbar-thumb-hover: #3daee9a6;
     in-out property <color> scrollbar-thumb-active: #3daee9;
-    in-out property <length> scrollbar-width: 16px;
-    in-out property <length> scroller-width: 8px;
+    // Lane width (separator included), handle thickness, handle offset.
+    in-out property <length> scrollbar-width: 23px;
+    in-out property <length> scroller-width: 9px;
+    in-out property <length> scrollbar-inset: 7px;
     in-out property <length> scrollbar-min-thumb: 20px;
 
     // ---- Fonts ----

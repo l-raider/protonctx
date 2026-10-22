@@ -243,22 +243,27 @@ export component MainWindow inherits Window {
                     border-radius: Theme.radius;
                     clip: true;
 
+                    // Inside the frame line, so the scroll bar lanes sit at its
+                    // edges; the text keeps its padding inside the content.
                     log-scroll := ScrollArea {
-                        x: 5px;
-                        y: 5px;
-                        width: parent.width - 10px;
-                        height: parent.height - 10px;
-                        content-width: log-input.preferred-width + 20px;
-                        content-height: log-input.preferred-height + 16px;
+                        x: 1px;
+                        y: 1px;
+                        width: parent.width - 2px;
+                        height: parent.height - 2px;
+                        content-width: log-input.preferred-width + 28px;
+                        content-height: log-input.preferred-height + 24px;
                         scrolled => {
                             root.log-following = self.offset-y <= min(0px, self.visible-height - self.content-height) + 1px;
                         }
 
                         log-input := TextInput {
-                            x: 10px;
-                            y: 8px;
-                            width: max(self.preferred-width, log-scroll.visible-width - 20px);
-                            height: max(self.preferred-height, log-scroll.visible-height - 16px);
+                            x: 14px;
+                            y: 12px;
+                            // Fill the frame (so clicks anywhere select), sized
+                            // from the frame rather than the view: the view
+                            // shrinks for a lane, which depends on this size.
+                            width: max(self.preferred-width, log-frame.width - 30px);
+                            height: max(self.preferred-height, log-frame.height - 26px);
                             text: root.log-text;
                             read-only: true;
                             single-line: false;

@@ -69,6 +69,26 @@ fn to_color(rgba: Rgba) -> Color {
 /// table rows).
 pub const ACCENT_ALPHA: f32 = 0.3;
 
+/// Alpha of the menu highlight's fill; the highlight is outlined in the
+/// opaque colour (Breeze, as tuned in the egui rapidchecksum build).
+const MENU_HOVER_ALPHA: f32 = 0.25;
+
+/// Breeze's scroll bar handle: the focus colour, faded while idle and
+/// hovered, opaque while dragged. `native-theme`'s scrollbar colours come from
+/// the bundled preset whatever the KDE scheme says, so they are not used.
+const THUMB_IDLE_ALPHA: f32 = 0.4;
+const THUMB_HOVER_ALPHA: f32 = 0.65;
+
+/// Breeze's scroll bar lane, across it: a separator line, a gap, the 9 px
+/// handle and a slightly wider gap.
+const SCROLLBAR_LINE: f32 = 1.0;
+const SCROLLBAR_GAP: f32 = 6.0;
+const SCROLLER_WIDTH: f32 = 9.0;
+const SCROLLBAR_TRAILING_GAP: f32 = 7.0;
+
+/// The lane separator: the view's grid colour at this alpha.
+const SCROLLBAR_LINE_ALPHA: f32 = 0.7;
+
 /// KDE's frame contrast: `[KDE] contrast=4` → Kirigami `frameContrast` 0.2.
 /// QtWidgets' frame colour (`QPalette::Mid`) is the window text blended over
 /// the window fill at this weight, in sRGB.
@@ -140,14 +160,24 @@ pub struct AppTokens {
     /// Popup menu fill: KDE draws menus on the window background.
     pub menu_background: Color,
     pub menu_foreground: Color,
+    /// Hovered menu item: the selection tint, outlined in [`Self::menu_hover_border`].
+    pub menu_hover: Color,
+    pub menu_hover_border: Color,
 
     // ---- Scrollbars ----
+    /// Lane fill (the view background).
     pub scrollbar_track: Color,
+    /// Line between the content and a lane.
+    pub scrollbar_separator: Color,
     pub scrollbar_thumb: Color,
     pub scrollbar_thumb_hover: Color,
     pub scrollbar_thumb_active: Color,
+    /// Lane width, the separator line included.
     pub scrollbar_width: f32,
+    /// Handle thickness.
     pub scroller_width: f32,
+    /// Offset of the handle inside the lane.
+    pub scrollbar_inset: f32,
     pub scrollbar_min_thumb: f32,
 
     // ---- Fonts ----
@@ -256,6 +286,10 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
         background
     };
     let primary = to_color(r.button.primary_background);
+    // Qt paints menu highlights with the Selection colour set, as list
+    // selections are; `menu.hover_background` follows the accent instead.
+    let menu_highlight = with_alpha(to_color(r.list.selection_background), 1.0);
+    let ring = to_color(d.focus_ring_color);
 
     AppTokens {
         reduce_motion: loaded.prefs.reduce_motion,
@@ -277,7 +311,7 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
         button_foreground: to_color(r.button.font.color),
         primary,
         primary_foreground: to_color(r.button.primary_text_color),
-        ring: to_color(d.focus_ring_color),
+        ring,
         accent: with_alpha(selection, ACCENT_ALPHA),
         selection,
         selection_hover: qt_lighter(primary, 110.0),
@@ -288,17 +322,17 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
 
         menu_background: background,
         menu_foreground: to_color(r.menu.font.color),
+        menu_hover: with_alpha(menu_highlight, MENU_HOVER_ALPHA),
+        menu_hover_border: menu_highlight,
 
-        scrollbar_track: to_color(r.scrollbar.track_color),
-        scrollbar_thumb: to_color(r.scrollbar.thumb_color),
-        scrollbar_thumb_hover: to_color(r.scrollbar.thumb_hover_color),
-        scrollbar_thumb_active: to_color(
-            r.scrollbar
-                .thumb_active_color
-                .unwrap_or(r.scrollbar.thumb_hover_color),
-        ),
-        scrollbar_width: r.scrollbar.groove_width,
-        scroller_width: r.scrollbar.thumb_width,
+        scrollbar_track: view,
+        scrollbar_separator: with_alpha(to_color(r.list.grid_color), SCROLLBAR_LINE_ALPHA),
+        scrollbar_thumb: with_alpha(ring, THUMB_IDLE_ALPHA),
+        scrollbar_thumb_hover: with_alpha(ring, THUMB_HOVER_ALPHA),
+        scrollbar_thumb_active: with_alpha(ring, 1.0),
+        scrollbar_width: SCROLLBAR_LINE + SCROLLBAR_GAP + SCROLLER_WIDTH + SCROLLBAR_TRAILING_GAP,
+        scroller_width: SCROLLER_WIDTH,
+        scrollbar_inset: SCROLLBAR_LINE + SCROLLBAR_GAP,
         scrollbar_min_thumb: r.scrollbar.min_thumb_length,
 
         font_family: family(&d.font),
@@ -316,7 +350,10 @@ fn family(spec: &ResolvedFontSpec) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ACCENT_ALPHA, Color, build, qt_lighter};
+    use super::{
+        ACCENT_ALPHA, Color, MENU_HOVER_ALPHA, THUMB_HOVER_ALPHA, THUMB_IDLE_ALPHA, build,
+        qt_lighter,
+    };
     use crate::system_theme::preset;
 
     fn hex(rgb: u32) -> Color {
@@ -358,17 +395,25 @@ mod tests {
         );
         assert_eq!(t.selection.a, 1.0);
         assert_close(t.border, hex(0x4C4E51), "frame");
+        let focus = |a: f32| Color { a, ..hex(0x3DAEE9) };
         assert_close(
             t.scrollbar_thumb,
-            Color::from_rgba8(252, 252, 252, 128.0 / 255.0),
+            focus(THUMB_IDLE_ALPHA),
             "scrollbar thumb",
         );
-        assert_close(t.scrollbar_thumb_hover, hex(0x3DAEE9), "thumb hover");
-        assert_eq!(t.scrollbar_thumb_active, t.scrollbar_thumb_hover);
-        assert_close(t.scrollbar_track, hex(0x202326), "scrollbar track");
+        assert_close(
+            t.scrollbar_thumb_hover,
+            focus(THUMB_HOVER_ALPHA),
+            "thumb hover",
+        );
+        assert_close(t.scrollbar_thumb_active, focus(1.0), "thumb active");
+        assert_close(t.scrollbar_track, hex(0x141618), "scrollbar lane");
         assert_close(t.menu_background, t.background, "menu background");
-        assert_eq!(t.scrollbar_width, 16.0);
-        assert_eq!(t.scroller_width, 8.0);
+        assert_close(t.menu_hover, focus(MENU_HOVER_ALPHA), "menu hover");
+        assert_close(t.menu_hover_border, focus(1.0), "menu hover outline");
+        assert_eq!(t.scrollbar_width, 23.0);
+        assert_eq!(t.scroller_width, 9.0);
+        assert_eq!(t.scrollbar_inset, 7.0);
         assert_eq!(t.font_size, 10.0 * 96.0 / 72.0);
         assert_eq!(t.mono_size, 10.0 * 96.0 / 72.0);
         assert_eq!(t.font_family, "Noto Sans");
@@ -395,13 +440,16 @@ mod tests {
 
         assert!(!loaded.is_dark);
         assert_close(t.background, hex(0xEFF0F1), "window background");
-        assert_close(t.scrollbar_track, hex(0xEFF0F1), "scrollbar track");
+        // The lane is the view fill; the handle the focus colour, faded.
+        assert_close(t.scrollbar_track, hex(0xFFFFFF), "scrollbar lane");
         assert_close(
             t.scrollbar_thumb,
-            Color::from_rgba8(0x23, 0x26, 0x29, 128.0 / 255.0),
+            Color {
+                a: THUMB_IDLE_ALPHA,
+                ..hex(0x3DAEE9)
+            },
             "scrollbar thumb",
         );
-        assert_close(t.scrollbar_thumb_hover, hex(0x3DAEE9), "thumb hover");
         // Light themes fill outline buttons with the window colour.
         assert_eq!(t.input_background, t.background);
     }
