@@ -4,13 +4,16 @@
 //! scheme (colors, typography, DPI, accessibility) once at startup and the
 //! active variant is handed to [`crate::theme`], which builds the app's
 //! design tokens from it. Live scheme changes are out of
-//! scope. Off KDE (and in tests, which must stay deterministic) the bundled
-//! Breeze preset is used instead. Before use, the resolved variant has its
+//! scope. The light/dark preference comes from the XDG Settings portal
+//! (`org.freedesktop.appearance` `color-scheme`), which a Flatpak sandbox sees
+//! too. Off KDE, when the scheme contradicts that preference, and in tests
+//! (which must stay deterministic) the bundled Breeze preset is used instead,
+//! in the preferred mode. Before use, the resolved variant has its
 //! fonts re-derived at the base logical DPI. Its scrollbar model is not used:
 //! [`crate::theme`] paints Breeze scroll bars from its own constants.
 
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use native_theme::theme::{ColorMode, FontSize, ResolvedFontSpec, ResolvedTheme};
 use native_theme::{AccessibilityPreferences, SystemTheme};
@@ -26,9 +29,10 @@ pub(crate) const FALLBACK_PRESET: &str = "kde-breeze";
 /// base logical DPI, as Qt does.
 const BASE_DPI: f32 = 96.0;
 
-/// Upper bound on the startup theme read. On KDE the reader makes a portal
-/// D-Bus call that has no timeout of its own; a stalled portal must not block
-/// startup before the first window opens.
+/// Upper bound on the startup theme reads (the KDE reader and the Settings
+/// portal, which run side by side). Both make portal D-Bus calls that have no
+/// timeout of their own; a stalled portal must not block startup before the
+/// first window opens.
 const THEME_READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The theme the application runs with: the resolved variant, its display
@@ -38,13 +42,6 @@ pub struct LoadedTheme {
     pub resolved: ResolvedTheme,
     pub is_dark: bool,
     pub prefs: AccessibilityPreferences,
-}
-
-/// Result of the worker-thread theme read; the error is stringified so it can
-/// cross the thread boundary.
-enum ThemeRead {
-    Ready(Box<SystemTheme>),
-    Failed(String),
 }
 
 /// The logical-pixel size `font` should render at: a point-stated size is
@@ -67,24 +64,49 @@ fn normalize_resolved_fonts(resolved: &mut ResolvedTheme) {
 /// Reads the desktop theme once at startup.
 ///
 /// `preset_mode` forces the bundled Breeze preset in that mode (the
-/// `--preset light|dark` development switch). Otherwise the live KDE scheme
-/// is read on KDE, and the Breeze preset in the system's mode is used off KDE
-/// or when the reader fails.
+/// `--preset light|dark` development switch). Otherwise the light/dark
+/// preference comes from the XDG Settings portal, which answers the same
+/// inside a Flatpak sandbox as outside it. On KDE the live scheme supplies the
+/// colours, as long as it agrees with that preference: a scheme the reader
+/// cannot see (a sandbox without access to `kdeglobals`, a desktop default
+/// the user never overrode) reads as plain light Breeze. Off KDE, on a
+/// disagreement, or when the reader fails, the Breeze preset is used in the
+/// preferred mode.
 pub fn load(preset_mode: Option<bool>) -> LoadedTheme {
     if let Some(is_dark) = preset_mode {
         return preset(&AccessibilityPreferences::default(), is_dark);
     }
 
-    if !is_kde(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()) {
-        return preset(
-            &AccessibilityPreferences::default(),
-            native_theme::detect::system_is_dark(),
-        );
-    }
+    let deadline = Instant::now() + THEME_READ_TIMEOUT;
+    let portal = spawn_read("color-scheme-read", portal_prefers_dark);
+    let kde = is_kde(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()).then(|| {
+        spawn_read("system-theme-read", || {
+            SystemTheme::from_system().map_err(|e| e.to_string())
+        })
+    });
+    let portal_dark = portal
+        .and_then(|read| wait_read(read, deadline))
+        .unwrap_or_else(|error| {
+            eprintln!("protonctx: could not read the color-scheme preference ({error})");
+            None
+        });
+    // The preference, or the platform's own guess without one.
+    let preferred_dark = || portal_dark.unwrap_or_else(native_theme::detect::system_is_dark);
 
-    match read_system_theme() {
+    let Some(kde) = kde else {
+        return preset(&AccessibilityPreferences::default(), preferred_dark());
+    };
+    match kde.and_then(|read| wait_read(read, deadline)) {
         Ok(system) => {
             let is_dark = system.mode == ColorMode::Dark;
+            if let Some(want_dark) = preset_mode_over_scheme(portal_dark, is_dark) {
+                eprintln!(
+                    "protonctx: the KDE colour scheme is {}, but the desktop prefers {}; using the {FALLBACK_PRESET} preset",
+                    mode_name(is_dark),
+                    mode_name(want_dark),
+                );
+                return preset(&system.accessibility, want_dark);
+            }
             let mut resolved = system.pick(system.mode).clone();
             normalize_resolved_fonts(&mut resolved);
             LoadedTheme {
@@ -99,41 +121,78 @@ pub fn load(preset_mode: Option<bool>) -> LoadedTheme {
             );
             // Defaults, not `from_system()`: the reader already failed or
             // timed out, so a second platform read would add another stall.
-            // `system_is_dark` reads `kdeglobals` directly on KDE.
-            preset(
-                &AccessibilityPreferences::default(),
-                native_theme::detect::system_is_dark(),
-            )
+            preset(&AccessibilityPreferences::default(), preferred_dark())
         }
     }
 }
 
-/// Reads the system theme on a worker thread and waits at most
-/// [`THEME_READ_TIMEOUT`], returning the failure reason instead of hanging.
-/// A timed-out reader is left to finish and drop its result.
-fn read_system_theme() -> Result<SystemTheme, String> {
-    let (sender, receiver) = mpsc::channel();
-    let reader = std::thread::Builder::new()
-        .name("system-theme-read".to_string())
-        .spawn(move || {
-            let outcome = match SystemTheme::from_system() {
-                Ok(system) => ThemeRead::Ready(Box::new(system)),
-                Err(error) => ThemeRead::Failed(error.to_string()),
-            };
-            let _ = sender.send(outcome);
-        });
-    if let Err(error) = reader {
-        return Err(format!("could not start the theme reader ({error})"));
-    }
+/// `"dark"` or `"light"`.
+fn mode_name(is_dark: bool) -> &'static str {
+    if is_dark { "dark" } else { "light" }
+}
 
-    match receiver.recv_timeout(THEME_READ_TIMEOUT) {
-        Ok(ThemeRead::Ready(system)) => Ok(*system),
-        Ok(ThemeRead::Failed(error)) => Err(error),
+/// The mode to use the Breeze preset in instead of the KDE scheme, when the
+/// desktop states a preference (`portal_dark`) the scheme's own mode
+/// contradicts; `None` keeps the scheme.
+fn preset_mode_over_scheme(portal_dark: Option<bool>, scheme_is_dark: bool) -> Option<bool> {
+    portal_dark.filter(|&want_dark| want_dark != scheme_is_dark)
+}
+
+/// The desktop's light/dark preference from the XDG Settings portal
+/// (`org.freedesktop.appearance` `color-scheme`): `Some(true)` for dark,
+/// `Some(false)` for light, `None` when the desktop states no preference.
+fn portal_prefers_dark() -> Result<Option<bool>, String> {
+    use ashpd::desktop::settings::Settings;
+    async_io::block_on(async {
+        let settings = Settings::new().await?;
+        settings.color_scheme().await
+    })
+    .map(prefers_dark)
+    .map_err(|error| error.to_string())
+}
+
+/// The portal's `color-scheme` value as a mode: 1 is dark, 2 is light, and 0
+/// (no preference) is none.
+fn prefers_dark(scheme: ashpd::desktop::settings::ColorScheme) -> Option<bool> {
+    use ashpd::desktop::settings::ColorScheme;
+    match scheme {
+        ColorScheme::PreferDark => Some(true),
+        ColorScheme::PreferLight => Some(false),
+        ColorScheme::NoPreference => None,
+    }
+}
+
+/// Start `read` on a worker thread named `name`; its outcome arrives on the
+/// returned channel (see [`wait_read`]). Platform reads make D-Bus calls with
+/// no timeout of their own, so they never run on the startup thread itself.
+fn spawn_read<T: Send + 'static>(
+    name: &str,
+    read: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<mpsc::Receiver<Result<T, String>>, String> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn(move || {
+            let _ = sender.send(read());
+        })
+        .map(|_| receiver)
+        .map_err(|error| format!("could not start the {name} thread ({error})"))
+}
+
+/// The outcome of a [`spawn_read`] by `deadline`, returning the failure
+/// reason instead of hanging. A timed-out reader is left to finish and drop
+/// its result.
+fn wait_read<T>(
+    receiver: mpsc::Receiver<Result<T, String>>,
+    deadline: Instant,
+) -> Result<T, String> {
+    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(outcome) => outcome,
         Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
             "the platform read did not finish within {THEME_READ_TIMEOUT:?}"
         )),
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            Err("the theme reader stopped unexpectedly".to_string())
+            Err("the platform reader stopped unexpectedly".to_string())
         }
     }
 }
@@ -191,8 +250,46 @@ mod tests {
     use native_theme::theme::{FontSize, FontStyle, ResolvedFontSpec};
 
     use super::{
-        AccessibilityPreferences, font_size_at_base_dpi, is_kde, normalize_resolved_fonts, preset,
+        AccessibilityPreferences, font_size_at_base_dpi, is_kde, normalize_resolved_fonts,
+        prefers_dark, preset, preset_mode_over_scheme, spawn_read, wait_read,
     };
+
+    #[test]
+    fn the_portal_color_scheme_maps_to_a_mode() {
+        use ashpd::desktop::settings::ColorScheme;
+        assert_eq!(prefers_dark(ColorScheme::PreferDark), Some(true));
+        assert_eq!(prefers_dark(ColorScheme::PreferLight), Some(false));
+        assert_eq!(prefers_dark(ColorScheme::NoPreference), None);
+    }
+
+    #[test]
+    fn a_scheme_against_the_desktop_preference_gives_way_to_the_preset() {
+        // A sandbox without kdeglobals reads as light Breeze on a dark desktop.
+        assert_eq!(preset_mode_over_scheme(Some(true), false), Some(true));
+        assert_eq!(preset_mode_over_scheme(Some(false), true), Some(false));
+        // An agreeing scheme, or no stated preference, keeps the KDE colours.
+        assert_eq!(preset_mode_over_scheme(Some(true), true), None);
+        assert_eq!(preset_mode_over_scheme(Some(false), false), None);
+        assert_eq!(preset_mode_over_scheme(None, true), None);
+        assert_eq!(preset_mode_over_scheme(None, false), None);
+    }
+
+    #[test]
+    fn a_stalled_read_gives_up_at_the_deadline() {
+        let read = spawn_read("test-stalled-read", || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            Ok(())
+        })
+        .unwrap();
+        let started = std::time::Instant::now();
+        let deadline = started + std::time::Duration::from_millis(50);
+        assert!(wait_read(read, deadline).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+
+        let read = spawn_read("test-quick-read", || Ok(7)).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        assert_eq!(wait_read(read, deadline), Ok(7));
+    }
 
     #[test]
     fn is_kde_matches_the_native_theme_detection() {
