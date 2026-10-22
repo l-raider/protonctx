@@ -284,11 +284,23 @@ impl App {
 
     fn start_launch(&mut self, mut process: crate::launcher::LaunchedProcess, status: String) {
         let generation = self.state.launch_started(status, &process.command_line);
-        background::stream_pipe(process.child.stdout.take(), self.launch_sender.clone());
-        background::stream_pipe(process.child.stderr.take(), self.launch_sender.clone());
-        if let Err(error) =
-            background::watch_exit(process.child, generation, self.launch_sender.clone())
-        {
+        let (token, readers) = background::reader_tracker();
+        background::stream_pipe(
+            process.child.stdout.take(),
+            self.launch_sender.clone(),
+            token.clone(),
+        );
+        background::stream_pipe(
+            process.child.stderr.take(),
+            self.launch_sender.clone(),
+            token,
+        );
+        if let Err(error) = background::watch_exit(
+            process.child,
+            generation,
+            readers,
+            self.launch_sender.clone(),
+        ) {
             // Without the watcher the child is never reaped and the launch
             // count never drops; clear it so the spinner cannot wedge.
             self.state.watcher_spawn_failed(&error, generation);

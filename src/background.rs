@@ -53,12 +53,44 @@ pub async fn next_batch(
     Some(batch)
 }
 
+/// How long the exit watcher waits, after the child exits, for its pipe
+/// readers to reach the end of the output, so the exit is reported after the
+/// last lines. Bounded because the pipes can outlive the child: Wine's
+/// wineserver inherits them and keeps them open after the launched tool
+/// exits.
+const READER_GRACE: Duration = Duration::from_millis(200);
+
+/// Tracks a launch's pipe readers for [`watch_exit`]: each reader holds a
+/// [`ReaderToken`] until it has forwarded its last line, and [`ReadersDone`]
+/// sees every token dropped.
+pub fn reader_tracker() -> (ReaderToken, ReadersDone) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    (ReaderToken(sender), ReadersDone(receiver))
+}
+
+/// Held by one pipe reader while it runs (cloned for each reader).
+#[derive(Clone)]
+pub struct ReaderToken(#[allow(dead_code)] std::sync::mpsc::Sender<()>);
+
+/// Waits for every [`ReaderToken`] to be dropped.
+pub struct ReadersDone(std::sync::mpsc::Receiver<()>);
+
+impl ReadersDone {
+    /// Block until every reader has finished, or `timeout` passes. Nothing is
+    /// ever sent: the wait ends when the last token's channel side is dropped.
+    fn wait(&self, timeout: Duration) {
+        let _ = self.0.recv_timeout(timeout);
+    }
+}
+
 /// Stream one captured pipe (stdout or stderr) of a launched child to the
 /// log, from its own thread: reads line by line (blocking until the child
-/// closes the pipe) and forwards each line through `sender`.
+/// closes the pipe) and forwards each line through `sender`. `token` is
+/// dropped once the last line has been sent (see [`watch_exit`]).
 pub fn stream_pipe<R: std::io::Read + Send + 'static>(
     reader: Option<R>,
     sender: async_channel::Sender<LaunchEvent>,
+    token: ReaderToken,
 ) {
     let Some(reader) = reader else {
         return;
@@ -67,6 +99,7 @@ pub fn stream_pipe<R: std::io::Read + Send + 'static>(
     let spawned = std::thread::Builder::new()
         .name("launch-output".to_string())
         .spawn(move || {
+            let _token = token;
             let read = read_lines(reader, |text| {
                 sender.send_blocking(LaunchEvent::Line { text }).is_ok()
             });
@@ -113,18 +146,22 @@ fn read_lines(
 }
 
 /// Wait for `child` on a watcher thread and report its exit as
-/// `generation`. The error is returned when the thread cannot be spawned; the
-/// child then keeps running unwatched and the caller must clean up its
-/// bookkeeping.
+/// `generation`. The exit is sent once the pipe readers tracked by `readers`
+/// have forwarded their last lines, or after [`READER_GRACE`] if a pipe stays
+/// open, so it follows the child's output in the log. The error is returned
+/// when the thread cannot be spawned; the child then keeps running unwatched
+/// and the caller must clean up its bookkeeping.
 pub fn watch_exit(
     mut child: std::process::Child,
     generation: u64,
+    readers: ReadersDone,
     sender: async_channel::Sender<LaunchEvent>,
 ) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("launch-watcher".to_string())
         .spawn(move || {
             let result = child.wait().map_err(|error| error.to_string());
+            readers.wait(READER_GRACE);
             let _ = sender.send_blocking(LaunchEvent::Exited { generation, result });
         })
         .map(|_| ())
@@ -179,7 +216,60 @@ async fn prompt_for_exe(initial_dir: Option<PathBuf>) -> ashpd::Result<Option<Pa
 
 #[cfg(test)]
 mod tests {
-    use super::{LaunchEvent, exit_message, next_batch, read_lines, stream_pipe};
+    use super::{
+        LaunchEvent, exit_message, next_batch, read_lines, reader_tracker, stream_pipe, watch_exit,
+    };
+
+    /// Run `script` under `sh` with its stdout fed to the log, and collect the
+    /// events until the exit.
+    fn launch_events(script: &str) -> Vec<LaunchEvent> {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", script])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (sender, receiver) = async_channel::bounded(super::LAUNCH_EVENT_CAPACITY);
+        let (token, readers) = reader_tracker();
+        stream_pipe(child.stdout.take(), sender.clone(), token);
+        watch_exit(child, 7, readers, sender).unwrap();
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.recv_blocking() {
+            let exited = matches!(event, LaunchEvent::Exited { .. });
+            events.push(event);
+            if exited {
+                break;
+            }
+        }
+        events
+    }
+
+    #[test]
+    fn the_exit_follows_the_last_output_line() {
+        // One write of ~9 KB just before exiting: it sits in the pipe while
+        // the child is already reaped, the case the exit used to overtake.
+        for _ in 0..20 {
+            let events = launch_events("seq 1 2000");
+            let lines = events
+                .iter()
+                .filter(|event| matches!(event, LaunchEvent::Line { .. }))
+                .count();
+            assert_eq!(lines, 2000, "every line arrives before the exit");
+            assert!(matches!(
+                events.last(),
+                Some(LaunchEvent::Exited { generation: 7, .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn a_pipe_held_open_by_a_leftover_process_does_not_delay_the_exit() {
+        // As wineserver does: a background process inherits stdout and
+        // outlives the child.
+        let started = std::time::Instant::now();
+        let events = launch_events("sleep 3 & echo done");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        assert!(matches!(events.last(), Some(LaunchEvent::Exited { .. })));
+    }
 
     #[test]
     fn exit_messages_match_the_status_strings() {
@@ -217,6 +307,7 @@ mod tests {
         stream_pipe(
             Some(std::io::Cursor::new(b"ok\n\xE9t\xE9\r\nlast".to_vec())),
             sender,
+            reader_tracker().0,
         );
         let mut lines = Vec::new();
         // The reader thread drops the sender at EOF, which ends the loop.
