@@ -1,8 +1,11 @@
 // Dialog windows. Each is its own OS window with server-side decorations,
 // parented to the main window on X11 by the Rust side (`x11_dialog`). They
 // share one chrome: padding, a body, and a right-aligned footer of outline
-// buttons whose default carries Qt's focus border. Esc dismisses; Enter and
-// Space activate the default button.
+// buttons. Each dialog focuses its default button when it opens (Rust calls
+// `focus-default` before showing it), so that button carries Qt's focus
+// border. Esc dismisses; Tab moves the focus; Space or Enter activates the
+// focused control, and Enter on a control that takes no Enter (the check box)
+// activates the default button.
 
 import { Theme } from "theme.slint";
 import { Icon, OutlineButton, CheckBox, ScrollArea } from "widgets.slint";
@@ -14,20 +17,25 @@ component DialogWindow inherits Window {
     default-font-size: Theme.font-size;
     default-font-weight: Theme.font-weight;
     icon: @image-url("../packaging/icons/hicolor/256x256/apps/protonctx.png");
-    forward-focus: keys;
 
     // Esc (and the WM close button, from Rust).
     callback dismiss();
-    // Enter / Space.
+    // Enter that the focused control did not take.
     callback activate-default();
 
+    // Never focused itself: it sees the keys the focused control passes up.
     keys := FocusScope {
-        key-pressed(event) => {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        capture-key-pressed(event) => {
             if event.text == Key.Escape {
                 root.dismiss();
                 return accept;
             }
-            if event.text == Key.Return || event.text == " " {
+            reject
+        }
+        key-pressed(event) => {
+            if event.text == Key.Return {
                 root.activate-default();
                 return accept;
             }
@@ -53,6 +61,10 @@ export component AboutDialog inherits DialogWindow {
     height: 200px;
     in property <string> version;
     callback ok();
+    forward-focus: ok-button;
+    public function focus-default() {
+        ok-button.focus();
+    }
     dismiss => {
         root.ok();
     }
@@ -97,11 +109,10 @@ export component AboutDialog inherits DialogWindow {
         }
         HorizontalLayout {
             alignment: end;
-            OutlineButton {
+            ok-button := OutlineButton {
                 text: "OK";
                 has-icon: true;
                 icon: @image-url("../assets/icons/check.svg");
-                default-focus: true;
                 clicked => {
                     root.ok();
                 }
@@ -117,6 +128,10 @@ export component SettingsDialog inherits DialogWindow {
     in-out property <bool> remember-last-dir: true;
     callback remember-changed(bool);
     callback ok();
+    forward-focus: ok-button;
+    public function focus-default() {
+        ok-button.focus();
+    }
     dismiss => {
         root.ok();
     }
@@ -140,11 +155,10 @@ export component SettingsDialog inherits DialogWindow {
         }
         HorizontalLayout {
             alignment: end;
-            OutlineButton {
+            ok-button := OutlineButton {
                 text: "OK";
                 has-icon: true;
                 icon: @image-url("../assets/icons/check.svg");
-                default-focus: true;
                 clicked => {
                     root.ok();
                 }
@@ -154,11 +168,17 @@ export component SettingsDialog inherits DialogWindow {
 }
 
 export component ErrorDialog inherits DialogWindow {
-    title: "Launch Error";
+    // What failed: the window title.
+    in property <string> heading: "Launch Error";
+    title: root.heading;
     width: 500px;
     height: 130px;
     in property <string> message;
     callback ok();
+    forward-focus: ok-button;
+    public function focus-default() {
+        ok-button.focus();
+    }
     dismiss => {
         root.ok();
     }
@@ -195,11 +215,10 @@ export component ErrorDialog inherits DialogWindow {
         }
         HorizontalLayout {
             alignment: end;
-            OutlineButton {
+            ok-button := OutlineButton {
                 text: "OK";
                 has-icon: true;
                 icon: @image-url("../assets/icons/check.svg");
-                default-focus: true;
                 clicked => {
                     root.ok();
                 }
@@ -217,10 +236,15 @@ export component DeleteCacheDialog inherits DialogWindow {
     in property <bool> deleting: false;
     callback yes();
     callback no();
+    // No is the default (the safe choice, as in Qt), and has the focus on
+    // every open: Yes is only a Tab away, never a stale Enter.
+    forward-focus: no-button;
+    public function focus-default() {
+        no-button.focus();
+    }
     dismiss => {
         root.no();
     }
-    // No is the default (the safe choice, as in Qt).
     activate-default => {
         root.no();
     }
@@ -257,12 +281,11 @@ export component DeleteCacheDialog inherits DialogWindow {
                     root.yes();
                 }
             }
-            OutlineButton {
+            no-button := OutlineButton {
                 text: "No";
                 has-icon: true;
                 icon: @image-url("../assets/icons/ban.svg");
                 enabled: !root.deleting;
-                default-focus: true;
                 clicked => {
                     root.no();
                 }

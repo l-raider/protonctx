@@ -36,8 +36,9 @@ pub fn new_dialog<T>(
     created
 }
 
-/// Whether an X server (XWayland on a Plasma Wayland session) is available.
-fn has_x11_display() -> bool {
+/// Whether an X server (XWayland on a Plasma Wayland session) is available,
+/// and so whether the windows are X11 ones.
+pub(crate) fn has_x11_display() -> bool {
     std::env::var_os("DISPLAY").is_some_and(|display| !display.is_empty())
 }
 

@@ -11,7 +11,7 @@ use native_theme::theme::{ResolvedFontSpec, ResolvedTheme};
 
 use crate::system_theme::LoadedTheme;
 
-/// A linear RGBA colour, each channel 0–1 in sRGB.
+/// An RGBA colour, each channel 0–1, the colour channels sRGB-encoded.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Color {
     pub r: f32,
@@ -74,8 +74,8 @@ pub const ACCENT_ALPHA: f32 = 0.3;
 const MENU_HOVER_ALPHA: f32 = 0.25;
 
 /// Breeze's scroll bar handle: the focus colour, faded while idle and
-/// hovered, opaque while dragged. `native-theme`'s scrollbar colours come from
-/// the bundled preset whatever the KDE scheme says, so they are not used.
+/// hovered, opaque while dragged. `native-theme`'s scrollbar model comes from
+/// the bundled preset whatever the KDE scheme says, so none of it is used.
 const THUMB_IDLE_ALPHA: f32 = 0.4;
 const THUMB_HOVER_ALPHA: f32 = 0.65;
 
@@ -85,6 +85,10 @@ const SCROLLBAR_LINE: f32 = 1.0;
 const SCROLLBAR_GAP: f32 = 6.0;
 const SCROLLER_WIDTH: f32 = 9.0;
 const SCROLLBAR_TRAILING_GAP: f32 = 7.0;
+
+/// Breeze's shortest scroll bar handle (`ScrollBar_MinSliderHeight` in
+/// `kstyle/breezemetrics.h`).
+const SCROLLBAR_MIN_THUMB: f32 = 20.0;
 
 /// The lane separator: the view's grid colour at this alpha.
 const SCROLLBAR_LINE_ALPHA: f32 = 0.7;
@@ -333,7 +337,7 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
         scrollbar_width: SCROLLBAR_LINE + SCROLLBAR_GAP + SCROLLER_WIDTH + SCROLLBAR_TRAILING_GAP,
         scroller_width: SCROLLER_WIDTH,
         scrollbar_inset: SCROLLBAR_LINE + SCROLLBAR_GAP,
-        scrollbar_min_thumb: r.scrollbar.min_thumb_length,
+        scrollbar_min_thumb: SCROLLBAR_MIN_THUMB,
 
         font_family: family(&d.font),
         font_weight: d.font.weight,
@@ -414,6 +418,7 @@ mod tests {
         assert_eq!(t.scrollbar_width, 23.0);
         assert_eq!(t.scroller_width, 9.0);
         assert_eq!(t.scrollbar_inset, 7.0);
+        assert_eq!(t.scrollbar_min_thumb, 20.0);
         assert_eq!(t.font_size, 10.0 * 96.0 / 72.0);
         assert_eq!(t.mono_size, 10.0 * 96.0 / 72.0);
         assert_eq!(t.font_family, "Noto Sans");

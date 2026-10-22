@@ -233,6 +233,9 @@ fn visual_states() {
     dialog.show().unwrap();
     let adapter = platform.windows.borrow().last().unwrap().clone();
     save(&adapter, 300, 100, "slint-dialog-settings");
+    // Tab focuses the check box, underlined as Breeze does.
+    key(dialog.window(), slint::platform::Key::Tab);
+    save(&adapter, 300, 100, "slint-dialog-settings-focus");
 
     let dialog = ErrorDialog::new().unwrap();
     crate::ui::apply_theme(&dialog, &tokens);
@@ -256,6 +259,8 @@ fn visual_states() {
     dialog.show().unwrap();
     let adapter = platform.windows.borrow().last().unwrap().clone();
     save(&adapter, 520, 230, "slint-dialog-delete-cache");
+    key(dialog.window(), slint::platform::Key::Tab);
+    save(&adapter, 520, 230, "slint-dialog-delete-cache-focus-yes");
 }
 
 /// Records which callbacks fired, in order.
@@ -382,9 +387,12 @@ fn main_window_routes_input_to_its_callbacks() {
 }
 
 /// Esc dismisses every dialog; Enter picks the default button, which is No
-/// for the destructive one.
+/// for the destructive one. Tab moves the focus, and Space or Enter acts on
+/// the focused control.
 #[test]
 fn dialog_keys_dismiss_or_pick_the_default() {
+    use slint::platform::Key;
+
     let _platform = platform();
     let calls = Rc::new(Calls::default());
 
@@ -392,9 +400,10 @@ fn dialog_keys_dismiss_or_pick_the_default() {
     about.show().unwrap();
     let c = calls.clone();
     about.on_ok(move || c.push("ok"));
-    key(about.window(), slint::platform::Key::Escape);
-    key(about.window(), slint::platform::Key::Return);
-    assert_eq!(calls.take(), ["ok", "ok"]);
+    key(about.window(), Key::Escape);
+    key(about.window(), Key::Return);
+    key(about.window(), " ");
+    assert_eq!(calls.take(), ["ok", "ok", "ok"]);
 
     let delete = DeleteCacheDialog::new().unwrap();
     delete.show().unwrap();
@@ -402,7 +411,37 @@ fn dialog_keys_dismiss_or_pick_the_default() {
     delete.on_yes(move || c.push("yes"));
     let c = calls.clone();
     delete.on_no(move || c.push("no"));
-    key(delete.window(), slint::platform::Key::Return);
-    key(delete.window(), slint::platform::Key::Escape);
+    key(delete.window(), Key::Return);
+    key(delete.window(), Key::Escape);
     assert_eq!(calls.take(), ["no", "no"]);
+
+    // Yes is a Tab away; Esc still means No from there.
+    key(delete.window(), Key::Tab);
+    key(delete.window(), Key::Return);
+    key(delete.window(), Key::Escape);
+    key(delete.window(), " ");
+    assert_eq!(calls.take(), ["yes", "no", "yes"]);
+    // Reopening puts the focus back on No.
+    delete.invoke_focus_default();
+    key(delete.window(), Key::Return);
+    assert_eq!(calls.take(), ["no"]);
+
+    let settings = SettingsDialog::new().unwrap();
+    settings.show().unwrap();
+    let c = calls.clone();
+    settings.on_ok(move || c.push("ok"));
+    let c = calls.clone();
+    settings.on_remember_changed(move |value| c.push(format!("remember {value}")));
+    key(settings.window(), " ");
+    assert_eq!(calls.take(), ["ok"]);
+
+    // Space on the focused check box toggles it and keeps the dialog open;
+    // Enter there picks OK, and Esc dismisses.
+    key(settings.window(), Key::Tab);
+    key(settings.window(), " ");
+    assert_eq!(calls.take(), ["remember false"]);
+    assert!(!settings.get_remember_last_dir());
+    key(settings.window(), Key::Return);
+    key(settings.window(), Key::Escape);
+    assert_eq!(calls.take(), ["ok", "ok"]);
 }

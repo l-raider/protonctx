@@ -264,7 +264,7 @@ impl App {
         match self.state.selected_row() {
             Some(row) => Some(row.to_game()),
             None => {
-                self.show_error("No game selected".to_string());
+                self.show_error(Failure::Launch, "No game selected".to_string());
                 None
             }
         }
@@ -276,7 +276,9 @@ impl App {
         };
         match crate::launcher::launch_tool(&game, tool) {
             Ok(process) => self.start_launch(process, format!("Running {tool}...")),
-            Err(error) => self.show_error(format!("Failed to launch {tool}: {error}")),
+            Err(error) => {
+                self.show_error(Failure::Launch, format!("Failed to launch {tool}: {error}"))
+            }
         }
     }
 
@@ -347,7 +349,10 @@ impl App {
             }
             BrowseOutcome::Nothing => {}
             BrowseOutcome::Failed(error) => {
-                self.show_error(format!("Failed to open file dialog: {error}"));
+                self.show_error(
+                    Failure::FileDialog,
+                    format!("Failed to open file dialog: {error}"),
+                );
             }
         }
     }
@@ -364,9 +369,10 @@ impl App {
                 let _ = sender.send_blocking(crate::launcher::resolve_executable(&path));
             });
         if let Err(error) = spawned {
-            self.show_error(format!(
-                "Failed to launch: could not start a thread ({error})"
-            ));
+            self.show_error(
+                Failure::Launch,
+                format!("Failed to launch: could not start a thread ({error})"),
+            );
             return;
         }
         let me = self.me.clone();
@@ -377,7 +383,9 @@ impl App {
             with_app(&me, |app| {
                 match crate::launcher::run_executable(&game, &exe) {
                     Ok(process) => app.start_launch(process, status),
-                    Err(error) => app.show_error(format!("Failed to launch: {error}")),
+                    Err(error) => {
+                        app.show_error(Failure::Launch, format!("Failed to launch: {error}"));
+                    }
                 }
             });
         });
@@ -440,10 +448,36 @@ impl App {
             self.sync();
             return;
         }
+        // A reused dialog opens as a new one does: the focus on its default
+        // button, whatever was focused when it last closed.
+        self.focus_default(which);
         if let Err(error) = window.show() {
             eprintln!("protonctx: could not open a dialog: {error}");
             return;
         }
+        // Without an X display the windows are native Wayland ones, which
+        // cannot be parented (see `ui::select_backend`).
+        if crate::ui::has_x11_display() {
+            self.parent_to_main(which);
+        }
+        self.sync();
+    }
+
+    /// Give a dialog's default button the keyboard focus.
+    fn focus_default(&self, which: Which) {
+        match which {
+            Which::About => self.about.as_ref().map(AboutDialog::invoke_focus_default),
+            Which::Settings => self
+                .settings
+                .as_ref()
+                .map(SettingsDialog::invoke_focus_default),
+            Which::Error => self.error.as_ref().map(ErrorDialog::invoke_focus_default),
+            Which::Delete => self.delete.as_ref().map(|(d, _)| d.invoke_focus_default()),
+        };
+    }
+
+    /// Mark a shown dialog as a dialog of the main window on X11.
+    fn parent_to_main(&self, which: Which) {
         let main = self.ui.clone();
         match which {
             Which::About => self
@@ -463,7 +497,6 @@ impl App {
                 .as_ref()
                 .map(|(d, _)| parent_when_mapped(d.as_weak(), main, 0)),
         };
-        self.sync();
     }
 
     fn open_about(&mut self) {
@@ -502,10 +535,12 @@ impl App {
         self.present(Which::Settings);
     }
 
-    /// Log a failure and show it in the Launch Error dialog; the dialog is
-    /// transient, so the log keeps the history.
-    fn show_error(&mut self, message: String) {
-        self.state.log.append(&format!("Launch error: {message}"));
+    /// Log a failure and show it in the error dialog, titled for what
+    /// failed; the dialog is transient, so the log keeps the history.
+    fn show_error(&mut self, failure: Failure, message: String) {
+        self.state
+            .log
+            .append(&format!("{}: {message}", failure.log_label()));
         if self.error.is_none() {
             let Ok(dialog) = crate::ui::new_dialog(ErrorDialog::new) else {
                 self.sync();
@@ -518,6 +553,7 @@ impl App {
             self.error = Some(dialog);
         }
         if let Some(dialog) = &self.error {
+            dialog.set_heading(failure.title().into());
             dialog.set_message(message.into());
         }
         self.present(Which::Error);
@@ -595,7 +631,7 @@ impl App {
                 }
                 app.dismiss(Which::Delete);
                 match error {
-                    Some(message) => app.show_error(message),
+                    Some(message) => app.show_error(Failure::ShaderCache, message),
                     None => app.sync(),
                 }
             });
@@ -616,6 +652,37 @@ impl App {
             .log
             .append(&format!("Settings: remember last directory = {value}"));
         self.sync();
+    }
+}
+
+/// What a failure shown in the error dialog was about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Failure {
+    /// Starting a process in a prefix, or nothing selected to start it in.
+    Launch,
+    /// The portal file chooser.
+    FileDialog,
+    /// Deleting a shader cache.
+    ShaderCache,
+}
+
+impl Failure {
+    /// The error dialog's title.
+    fn title(self) -> &'static str {
+        match self {
+            Failure::Launch => "Launch Error",
+            Failure::FileDialog => "File Dialog Error",
+            Failure::ShaderCache => "Shader Cache Error",
+        }
+    }
+
+    /// The label the log line starts with.
+    fn log_label(self) -> &'static str {
+        match self {
+            Failure::Launch => "Launch error",
+            Failure::FileDialog => "File dialog error",
+            Failure::ShaderCache => "Shader cache error",
+        }
     }
 }
 

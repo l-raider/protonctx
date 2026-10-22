@@ -5,15 +5,13 @@
 //! active variant is handed to [`crate::theme`], which builds the app's
 //! design tokens from it. Live scheme changes are out of
 //! scope. Off KDE (and in tests, which must stay deterministic) the bundled
-//! Breeze preset is used instead. Before use, the resolved variant also has
-//! its fonts re-derived at the base logical DPI and its scrollbar model
-//! re-derived from the palette, so every scrollbar paints the Qt/Breeze
-//! track and handle.
+//! Breeze preset is used instead. Before use, the resolved variant has its
+//! fonts re-derived at the base logical DPI. Its scrollbar model is not used:
+//! [`crate::theme`] paints Breeze scroll bars from its own constants.
 
 use std::sync::mpsc;
 use std::time::Duration;
 
-use native_theme::color::Rgba;
 use native_theme::theme::{ColorMode, FontSize, ResolvedFontSpec, ResolvedTheme};
 use native_theme::{AccessibilityPreferences, SystemTheme};
 
@@ -32,22 +30,6 @@ const BASE_DPI: f32 = 96.0;
 /// D-Bus call that has no timeout of its own; a stalled portal must not block
 /// startup before the first window opens.
 const THEME_READ_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// Breeze scrollbar metrics (`kstyle/breezemetrics.h`): the groove is
-/// `ScrollBar_Extend`, the handle `ScrollBar_SliderWidth` with
-/// `ScrollBar_MinSliderHeight` as the minimum length.
-///
-/// The groove is pinned to the 16 px rail the gpui build used instead of
-/// Breeze's 21 px, so the table and log keep the same content width; the
-/// Breeze handle width is kept and centred with 4 px on both sides.
-pub(crate) const SCROLLBAR_RAIL_WIDTH: f32 = 16.0;
-pub(crate) const SCROLLBAR_THUMB_WIDTH: f32 = 8.0;
-pub(crate) const SCROLLBAR_MIN_THUMB_LENGTH: f32 = 20.0;
-
-/// Breeze paints the resting handle as `QPalette::WindowText` at 50 % over
-/// the window fill (`scrollBarHandleColor` / `renderScrollBarHandle`); the
-/// alpha is kept so it composites over the groove as Qt does.
-const SCROLLBAR_THUMB_ALPHA: f32 = 0.5;
 
 /// The theme the application runs with: the resolved variant, its display
 /// name, and the accessibility preferences that scale its text.
@@ -75,48 +57,11 @@ fn font_size_at_base_dpi(font: &ResolvedFontSpec) -> f32 {
     }
 }
 
-/// Re-derives the base UI and mono fonts of `resolved` at [`BASE_DPI`].
+/// Re-derives the base UI and mono fonts of `resolved` at [`BASE_DPI`]; every
+/// theme the app uses goes through this.
 fn normalize_resolved_fonts(resolved: &mut ResolvedTheme) {
     resolved.defaults.font.size = font_size_at_base_dpi(&resolved.defaults.font);
     resolved.defaults.mono_font.size = font_size_at_base_dpi(&resolved.defaults.mono_font);
-}
-
-/// `color` with its alpha scaled by `factor`, RGB untouched.
-fn scale_alpha(color: Rgba, factor: f32) -> Rgba {
-    Rgba::new(
-        color.r,
-        color.g,
-        color.b,
-        (f32::from(color.a) * factor).round() as u8,
-    )
-}
-
-/// Re-derives the scrollbar model from the resolved KDE palette so every
-/// scrollbar — games table, log pane, dialogs — paints the Qt/Breeze track
-/// and handle in all states:
-///
-/// - track: the window fill, Breeze's groove colour;
-/// - thumb: the window text at [`SCROLLBAR_THUMB_ALPHA`] over the groove,
-///   Breeze's resting handle (light on Breeze Dark, dark on Breeze Light);
-/// - hover and pressed/drag: the selection background, the accent the Qt
-///   reference shows while the handle is hovered, kept while the handle is
-///   dragged so the grab reads as active;
-/// - geometry: 16 px rail / 8 px handle / 20 px minimum, centred.
-fn normalize_resolved_scrollbar(resolved: &mut ResolvedTheme) {
-    let thumb = scale_alpha(resolved.defaults.text_color, SCROLLBAR_THUMB_ALPHA);
-    resolved.scrollbar.groove_width = SCROLLBAR_RAIL_WIDTH;
-    resolved.scrollbar.thumb_width = SCROLLBAR_THUMB_WIDTH;
-    resolved.scrollbar.min_thumb_length = SCROLLBAR_MIN_THUMB_LENGTH;
-    resolved.scrollbar.track_color = resolved.defaults.background_color;
-    resolved.scrollbar.thumb_color = thumb;
-    resolved.scrollbar.thumb_hover_color = resolved.defaults.selection_background;
-    resolved.scrollbar.thumb_active_color = Some(resolved.defaults.selection_background);
-}
-
-/// Applies both normalizations; every theme the app uses goes through this.
-fn normalize(resolved: &mut ResolvedTheme) {
-    normalize_resolved_fonts(resolved);
-    normalize_resolved_scrollbar(resolved);
 }
 
 /// Reads the desktop theme once at startup.
@@ -141,7 +86,7 @@ pub fn load(preset_mode: Option<bool>) -> LoadedTheme {
         Ok(system) => {
             let is_dark = system.mode == ColorMode::Dark;
             let mut resolved = system.pick(system.mode).clone();
-            normalize(&mut resolved);
+            normalize_resolved_fonts(&mut resolved);
             LoadedTheme {
                 resolved,
                 is_dark,
@@ -222,7 +167,7 @@ pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
             }
         }
     };
-    normalize(&mut resolved);
+    normalize_resolved_fonts(&mut resolved);
     LoadedTheme {
         resolved,
         is_dark,
@@ -335,16 +280,6 @@ mod tests {
         // 10 pt at the base logical DPI, independent of the display DPI.
         assert_eq!(r.defaults.font.size, 10.0 * 96.0 / 72.0);
         assert_eq!(r.defaults.mono_font.size, 10.0 * 96.0 / 72.0);
-        assert_eq!(r.scrollbar.groove_width, 16.0);
-        assert_eq!(r.scrollbar.thumb_width, 8.0);
-        assert_eq!(r.scrollbar.min_thumb_length, 20.0);
-        assert_eq!(r.scrollbar.track_color, Rgba::rgb(0xEF, 0xF0, 0xF1));
-        assert_eq!(r.scrollbar.thumb_color, Rgba::new(0x23, 0x26, 0x29, 128));
-        assert_eq!(r.scrollbar.thumb_hover_color, Rgba::rgb(0x3D, 0xAE, 0xE9));
-        assert_eq!(
-            r.scrollbar.thumb_active_color,
-            Some(r.scrollbar.thumb_hover_color)
-        );
 
         let dark = preset(&AccessibilityPreferences::default(), true);
         assert!(dark.is_dark);
@@ -352,12 +287,5 @@ mod tests {
         assert_eq!(r.defaults.background_color, Rgba::rgb(0x20, 0x23, 0x26));
         assert_eq!(r.defaults.font.size, 10.0 * 96.0 / 72.0);
         assert_eq!(r.defaults.mono_font.size, 10.0 * 96.0 / 72.0);
-        assert_eq!(r.scrollbar.track_color, Rgba::rgb(0x20, 0x23, 0x26));
-        assert_eq!(r.scrollbar.thumb_color, Rgba::new(0xfc, 0xfc, 0xfc, 128));
-        assert_eq!(r.scrollbar.thumb_hover_color, Rgba::rgb(0x3D, 0xAE, 0xE9));
-        assert_eq!(
-            r.scrollbar.thumb_active_color,
-            Some(r.scrollbar.thumb_hover_color)
-        );
     }
 }
