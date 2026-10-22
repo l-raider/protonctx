@@ -66,7 +66,49 @@ Breeze colours instead of the live KDE scheme.
 
 The About, Settings and confirmation dialogs are real windows with server-side
 decorations. iced 0.14 cannot mark a window as a child of another, so KDE shows each
-open dialog in the taskbar, and on Wayland KWin chooses where it opens.
+open dialog in the taskbar, and on Wayland KWin chooses where it opens (see the optional
+KWin rule below).
+
+### Optional: KWin rule for the dialogs
+
+On KDE Plasma a window rule can hide the dialogs from the taskbar and pager, keep them in
+front, and centre them. Either create it in **System Settings → Window Management →
+Window Rules → Add New…**:
+
+| Property | Value |
+|----------|-------|
+| Window class (application) | Substring match: `protonctx` |
+| Window title | Regular expression: `^(About protonctx\|Settings\|Launch Error\|Delete Shader Cache)$` |
+| Skip taskbar | Force, Yes |
+| Skip pager | Force, Yes |
+| Keep above other windows | Force, Yes |
+| Initial placement | Force, Centered |
+
+or save the following as `protonctx-dialogs.kwinrule` and load it with **Import…** in the
+same settings page:
+
+```ini
+[protonctx dialogs]
+Description=protonctx dialogs
+wmclass=protonctx
+wmclassmatch=2
+wmclasscomplete=false
+title=^(About protonctx|Settings|Launch Error|Delete Shader Cache)$
+titlematch=3
+skiptaskbar=true
+skiptaskbarrule=2
+skippager=true
+skippagerrule=2
+above=true
+aboverule=2
+placement=5
+placementrule=2
+```
+
+The class match is a substring so it covers both the native build (`protonctx`) and the
+Flatpak (`io.github.l_raider.protonctx`); the title list keeps the main window
+untouched. *Keep above* puts a dialog in front of all windows, not only protonctx's,
+for as long as it is open.
 
 ### Keyboard shortcuts
 
