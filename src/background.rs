@@ -67,24 +67,48 @@ pub fn stream_pipe<R: std::io::Read + Send + 'static>(
     let spawned = std::thread::Builder::new()
         .name("launch-output".to_string())
         .spawn(move || {
-            use std::io::BufRead;
-            for line in std::io::BufReader::new(reader).lines() {
-                let text = match line {
-                    Ok(text) => text,
-                    Err(error) => {
-                        let _ = sender.send_blocking(LaunchEvent::Line {
-                            text: format!("read error: {error}"),
-                        });
-                        break;
-                    }
-                };
-                if sender.send_blocking(LaunchEvent::Line { text }).is_err() {
-                    break;
-                }
+            let read = read_lines(reader, |text| {
+                sender.send_blocking(LaunchEvent::Line { text }).is_ok()
+            });
+            if let Err(error) = read {
+                let _ = sender.send_blocking(LaunchEvent::Line {
+                    text: format!("read error: {error}"),
+                });
             }
         });
     if let Err(error) = spawned {
         eprintln!("protonctx: could not start a launch output reader: {error}");
+    }
+}
+
+/// Read `reader` to the end and pass each line to `emit`, stopping early
+/// when `emit` returns `false`.
+///
+/// Lines end at `\n`, and a `\r\n` ending is trimmed whole, as
+/// [`std::io::BufRead::lines`] does. Unlike `lines`, bytes that are not UTF-8
+/// (a Windows program writing in a legacy code page) are decoded lossily
+/// instead of failing: stopping would close the pipe's read end, losing the
+/// rest of the output and breaking the child's next write. Only a real I/O
+/// error ends the read early; `read_until` already retries interrupted reads.
+fn read_lines(
+    reader: impl std::io::Read,
+    mut emit: impl FnMut(String) -> bool,
+) -> std::io::Result<()> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(reader);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        if reader.read_until(b'\n', &mut buf)? == 0 {
+            return Ok(());
+        }
+        let line = match buf.strip_suffix(b"\n") {
+            Some(line) => line.strip_suffix(b"\r").unwrap_or(line),
+            None => &buf,
+        };
+        if !emit(String::from_utf8_lossy(line).into_owned()) {
+            return Ok(());
+        }
     }
 }
 
@@ -155,7 +179,7 @@ async fn prompt_for_exe(initial_dir: Option<PathBuf>) -> ashpd::Result<Option<Pa
 
 #[cfg(test)]
 mod tests {
-    use super::{LaunchEvent, exit_message, next_batch};
+    use super::{LaunchEvent, exit_message, next_batch, read_lines, stream_pipe};
 
     #[test]
     fn exit_messages_match_the_status_strings() {
@@ -184,5 +208,47 @@ mod tests {
         }
         let batch = async_io::block_on(next_batch(&receiver)).unwrap();
         assert_eq!(batch.len(), 5, "queued lines arrive as one batch");
+    }
+
+    #[test]
+    fn invalid_utf8_is_decoded_lossily_and_reading_continues() {
+        // CP-1252 `é` is 0xE9: one bad line must not end the capture.
+        let (sender, receiver) = async_channel::bounded(super::LAUNCH_EVENT_CAPACITY);
+        stream_pipe(
+            Some(std::io::Cursor::new(b"ok\n\xE9t\xE9\r\nlast".to_vec())),
+            sender,
+        );
+        let mut lines = Vec::new();
+        // The reader thread drops the sender at EOF, which ends the loop.
+        while let Ok(event) = receiver.recv_blocking() {
+            match event {
+                LaunchEvent::Line { text } => lines.push(text),
+                LaunchEvent::Exited { .. } => panic!("no exit from a pipe reader"),
+            }
+        }
+        assert_eq!(lines, ["ok", "\u{FFFD}t\u{FFFD}", "last"]);
+    }
+
+    #[test]
+    fn line_endings_are_trimmed_like_lines() {
+        let mut lines = Vec::new();
+        read_lines(&b"a\r\nb\n\nc\r"[..], |line| {
+            lines.push(line);
+            true
+        })
+        .unwrap();
+        // A lone `\r` without `\n` is kept, as `BufRead::lines` keeps it.
+        assert_eq!(lines, ["a", "b", "", "c\r"]);
+    }
+
+    #[test]
+    fn reading_stops_when_the_receiver_is_gone() {
+        let mut lines = Vec::new();
+        read_lines(&b"one\ntwo\nthree\n"[..], |line| {
+            lines.push(line);
+            lines.len() < 2
+        })
+        .unwrap();
+        assert_eq!(lines, ["one", "two"]);
     }
 }

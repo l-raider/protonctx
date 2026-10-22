@@ -42,9 +42,16 @@ pub fn shader_cache_dir_for(library: &Path, app_id: u32) -> PathBuf {
 /// touching the filesystem. Relative paths are rejected outright, so the
 /// derived path can never be resolved against the process CWD.
 ///
-/// The library path is canonicalized first so a symlinked library (which
-/// `libraryfolders.vdf` may list) resolves to the real directory Steam writes
-/// to.
+/// # Symlinks
+///
+/// The cache path itself is never resolved. A symlinked *library* (which
+/// `libraryfolders.vdf` may list) needs no special handling: the kernel follows
+/// symlinked parent components while deleting. A symlinked *cache directory*
+/// (people link `shadercache/<app_id>` to another disk) is removed as a link
+/// only, and its target is left untouched: the target was never checked by the
+/// guard, so deleting through the link could reach any directory. With the
+/// link gone Steam recreates a real cache directory, which is what "delete the
+/// cache" means to it.
 pub fn delete_shader_cache(library: &Path, app_id: u32) -> std::io::Result<bool> {
     let dir = shader_cache_dir_for(library, app_id);
 
@@ -58,16 +65,44 @@ pub fn delete_shader_cache(library: &Path, app_id: u32) -> std::io::Result<bool>
         ));
     }
 
-    // Canonicalize so a symlinked library resolves to the real location Steam
-    // uses. A missing path is fine here: it simply means there is no cache.
-    let target = std::fs::canonicalize(&dir).unwrap_or(dir);
-
-    if !target.is_dir() {
-        return Ok(false);
+    match CacheLeaf::of(&dir)? {
+        CacheLeaf::Missing | CacheLeaf::Other => Ok(false),
+        CacheLeaf::Link => std::fs::remove_file(&dir).map(|()| true),
+        CacheLeaf::Dir => std::fs::remove_dir_all(&dir).map(|()| true),
     }
+}
 
-    std::fs::remove_dir_all(&target)?;
-    Ok(true)
+/// What sits at a shader-cache path, read without following a symlink at the
+/// leaf (see [`delete_shader_cache`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheLeaf {
+    /// Nothing: the game has no cache yet.
+    Missing,
+    /// A symlink, dangling or not; only the link itself may be removed.
+    Link,
+    /// A real directory.
+    Dir,
+    /// A regular file or other non-directory; left alone.
+    Other,
+}
+
+impl CacheLeaf {
+    fn of(dir: &Path) -> std::io::Result<Self> {
+        let file_type = match std::fs::symlink_metadata(dir) {
+            Ok(metadata) => metadata.file_type(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::Missing);
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(if file_type.is_symlink() {
+            Self::Link
+        } else if file_type.is_dir() {
+            Self::Dir
+        } else {
+            Self::Other
+        })
+    }
 }
 
 /// Whether `dir` has the exact shape `<...>/steamapps/shadercache/<app_id>`.
@@ -168,6 +203,58 @@ mod tests {
 
         assert!(delete_shader_cache(&root, 274190).unwrap());
         assert!(!cache.exists());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_removes_a_symlinked_cache_but_not_its_target() {
+        // People move shader caches to another disk with a symlink. Deleting
+        // must remove the link only: the target was never checked by the guard.
+        let root = crate::test_support::temp_dir("shadercache_symlink");
+        let target = root.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep.txt"), "keep").unwrap();
+        let library = root.join("lib");
+        let cache = shader_cache_dir_for(&library, 274190);
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, &cache).unwrap();
+
+        assert!(delete_shader_cache(&library, 274190).unwrap());
+        assert!(
+            target.join("keep.txt").is_file(),
+            "the link target survives"
+        );
+        assert!(
+            std::fs::symlink_metadata(&cache).is_err(),
+            "the link itself is gone"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_removes_a_dangling_symlinked_cache() {
+        let root = crate::test_support::temp_dir("shadercache_dangling");
+        let cache = shader_cache_dir_for(&root, 274190);
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(root.join("missing"), &cache).unwrap();
+
+        assert!(delete_shader_cache(&root, 274190).unwrap());
+        assert!(std::fs::symlink_metadata(&cache).is_err());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_leaves_a_regular_file_alone() {
+        let root = crate::test_support::temp_dir("shadercache_file");
+        let cache = shader_cache_dir_for(&root, 274190);
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::fs::write(&cache, "not a directory").unwrap();
+
+        assert!(!delete_shader_cache(&root, 274190).unwrap());
+        assert!(cache.is_file());
 
         std::fs::remove_dir_all(&root).ok();
     }
