@@ -238,6 +238,15 @@ fn visual_states() {
     save(&adapter, 760, 520, "slint-table-keyboard-end");
     key(window, slint::platform::Key::PageUp);
     save(&adapter, 760, 520, "slint-table-keyboard-page-up");
+
+    // The status bar spinner, a quarter turn later in the second render.
+    main.set_launch_running(true);
+    main.set_status_text("Running winecfg...".into());
+    slint::platform::update_timers_and_animations();
+    save(&adapter, 760, 520, "slint-status-spinner-a");
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    slint::platform::update_timers_and_animations();
+    save(&adapter, 760, 520, "slint-status-spinner-b");
     drop(main);
 
     let dialog = AboutDialog::new().unwrap();

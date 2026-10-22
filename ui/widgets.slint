@@ -12,6 +12,49 @@ export component Icon inherits Image {
     image-fit: contain;
 }
 
+// Lucide's loader-circle (a 288° arc), spinning a turn a second; still, in
+// Lucide's own orientation, with reduced motion. Slint's software renderer
+// ignores rotation transforms, so instead of rotating an icon the arc itself
+// is redrawn at the moving angle.
+export component Spinner {
+    in property <length> size: Theme.font-size;
+    in property <color> color: Theme.foreground;
+    width: self.size;
+    height: self.size;
+
+    // Wrapped to one turn so the angle stays small over a long run.
+    property <angle> start: Theme.reduce-motion
+        ? 0deg
+        : Math.mod(animation-tick(), 1s) / 1s * 360deg;
+    property <angle> end: self.start + 288deg;
+
+    Path {
+        width: root.size;
+        height: root.size;
+        // Lucide's 24-unit box, so the arc keeps its size as it turns.
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: root.color;
+        stroke-width: root.size * 2 / 24;
+        stroke-line-cap: round;
+
+        MoveTo {
+            x: 12 + 9 * Math.cos(root.start);
+            y: 12 + 9 * Math.sin(root.start);
+        }
+        ArcTo {
+            x: 12 + 9 * Math.cos(root.end);
+            y: 12 + 9 * Math.sin(root.end);
+            radius-x: 9;
+            radius-y: 9;
+            large-arc: true;
+            sweep: true;
+        }
+    }
+}
+
 // The Breeze outline button of the action row and every dialog: 32 px high,
 // at least 80 px wide, with an optional leading icon. Tab focuses it (a click
 // does not, so the mouse never moves the focus border) and Space or Enter

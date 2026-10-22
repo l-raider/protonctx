@@ -1,7 +1,7 @@
 // The main window: toolbar, games table, action row, log pane, status bar.
 
 import { Theme } from "theme.slint";
-import { Icon, OutlineButton, ToolbarButton, MenuRow, MenuSeparator, MenuPanel, ScrollArea } from "widgets.slint";
+import { Icon, OutlineButton, ToolbarButton, MenuRow, MenuSeparator, MenuPanel, ScrollArea, Spinner } from "widgets.slint";
 import { GamesTable, GameRowData } from "table.slint";
 
 export { GameRowData }
@@ -346,12 +346,10 @@ export component MainWindow inherits Window {
                 padding-left: Theme.rem(2);
                 padding-right: Theme.rem(2);
                 spacing: Theme.rem(2);
-                if root.launch-running: Icon {
+                if root.launch-running: Spinner {
                     size: Theme.font-size + 2px;
                     y: (parent.height - self.height) / 2;
-                    source: @image-url("../assets/icons/loader-circle.svg");
-                    colorize: Theme.primary;
-                    transform-rotation: Theme.reduce-motion ? 0deg : animation-tick() * 360deg / 1s;
+                    color: Theme.primary;
                 }
                 Text {
                     text: root.status-text;
