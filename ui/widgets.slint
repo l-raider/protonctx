@@ -186,8 +186,7 @@ export component ToolbarButton {
         }
         if root.text != "": Text {
             accessible-role: none;
-            // gpui's text_sm (0.875 rem) in whole pixels, as gpui renders it.
-            font-size: round(Theme.font-size * 0.875 / 1px) * 1px;
+            // The window's body size, as the rest of the UI uses.
             text: root.text;
             vertical-alignment: center;
             color: root.fg;
