@@ -28,6 +28,12 @@ build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
     CARGO_NET_OFFLINE: 'true'
+    # The build replaces .cargo/config.toml with the vendor config, so the
+    # repo's rustflags do not apply here. rustc links with its bundled
+    # rust-lld on x86_64 Linux, which folds identical code like the host
+    # build does (docs/benchmarks/linker.md). No target-cpu: the Flatpak must
+    # run on any x86-64 CPU.
+    RUSTFLAGS: -C link-arg=-Wl,--icf=all
 
 modules:
   - name: protonctx
