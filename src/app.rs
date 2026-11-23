@@ -532,7 +532,27 @@ impl App {
         };
     }
 
+    /// On native Wayland, drop a hidden dialog so opening builds it anew.
+    /// Hiding a Wayland window destroys it, and Slint recreates it without
+    /// the window attributes hook (the app id that picks the icon, and the
+    /// non-resizable dialog type; see `ui::select_backend`). X11 keeps a
+    /// hidden window, and its dialog hints, so dialogs are reused there.
+    fn discard_hidden_on_wayland(&mut self, which: Which) {
+        if crate::ui::has_x11_display()
+            || self.window_of(which).is_none_or(slint::Window::is_visible)
+        {
+            return;
+        }
+        match which {
+            Which::About => self.about = None,
+            Which::Settings => self.settings = None,
+            Which::Error => self.error = None,
+            Which::Delete => self.delete = None,
+        }
+    }
+
     fn open_about(&mut self) {
+        self.discard_hidden_on_wayland(Which::About);
         if self.about.is_none() {
             let Ok(dialog) = crate::ui::new_dialog(AboutDialog::new) else {
                 return;
@@ -548,6 +568,7 @@ impl App {
     }
 
     fn open_settings(&mut self) {
+        self.discard_hidden_on_wayland(Which::Settings);
         if self.settings.is_none() {
             let Ok(dialog) = crate::ui::new_dialog(SettingsDialog::new) else {
                 return;
@@ -574,6 +595,7 @@ impl App {
         self.state
             .log
             .append(&format!("{}: {message}", failure.log_label()));
+        self.discard_hidden_on_wayland(Which::Error);
         if self.error.is_none() {
             let Ok(dialog) = crate::ui::new_dialog(ErrorDialog::new) else {
                 self.sync();
@@ -607,6 +629,7 @@ impl App {
              but for best results close the game before deleting.",
             path.display()
         );
+        self.discard_hidden_on_wayland(Which::Delete);
         if self.delete.is_none() {
             let Ok(dialog) = crate::ui::new_dialog(DeleteCacheDialog::new) else {
                 return;
@@ -1522,19 +1545,24 @@ mod tests {
         let cache = crate::steam::shadercache::shader_cache_dir_for(&steam_root(&home()), ALPHA);
         h.ui.invoke_delete_shader_cache();
         assert!(h.visible(Which::Delete));
-        let dialog = h.app.borrow().delete.as_ref().unwrap().0.clone_strong();
-        assert!(dialog.get_message().contains(&cache.display().to_string()));
-        dialog.invoke_no();
+        // The current dialog: without an X display each opening builds one.
+        let dialog = || h.app.borrow().delete.as_ref().unwrap().0.clone_strong();
+        assert!(
+            dialog()
+                .get_message()
+                .contains(&cache.display().to_string())
+        );
+        dialog().invoke_no();
         assert!(!h.visible(Which::Delete));
         assert!(cache.exists());
 
         // Confirmed: the dialog locks until the deletion finishes.
         h.ui.invoke_delete_shader_cache();
-        dialog.invoke_yes();
-        assert!(dialog.get_deleting());
+        dialog().invoke_yes();
+        assert!(dialog().get_deleting());
         assert!(h.app.borrow().state.deleting_shader_cache);
-        dialog.invoke_yes();
-        dialog.invoke_no();
+        dialog().invoke_yes();
+        dialog().invoke_no();
         assert!(h.visible(Which::Delete), "locked while deleting");
         let app = h.app.clone();
         run_until("the deletion", move || {
@@ -1547,7 +1575,7 @@ mod tests {
 
         // Nothing left to delete.
         h.ui.invoke_delete_shader_cache();
-        dialog.invoke_yes();
+        dialog().invoke_yes();
         let app = h.app.clone();
         run_until("the deletion", move || {
             !app.borrow().state.deleting_shader_cache
@@ -1559,7 +1587,7 @@ mod tests {
         if let Some((_, game)) = h.app.borrow_mut().delete.as_mut() {
             game.library_path = "relative/library".to_string();
         }
-        dialog.invoke_yes();
+        dialog().invoke_yes();
         let app = h.app.clone();
         run_until("the deletion", move || {
             !app.borrow().state.deleting_shader_cache
@@ -1626,6 +1654,67 @@ mod tests {
         about.hide().unwrap();
         drop(about);
         run_for(Duration::from_millis(20));
+    }
+
+    /// Dialogs are reused on X11, which keeps a hidden window and its hints,
+    /// and built anew on native Wayland, which destroys it on hiding.
+    #[test]
+    fn hidden_dialogs_are_reused_on_x11_and_rebuilt_on_wayland() {
+        if !is_child() {
+            // An X display that does not exist still selects the X11 path.
+            in_fake_home(
+                "hidden_dialogs_are_reused_on_x11_and_rebuilt_on_wayland",
+                "app_reuse_x11",
+                Some(":31999"),
+            );
+            return in_fake_home(
+                "hidden_dialogs_are_reused_on_x11_and_rebuilt_on_wayland",
+                "app_reuse_wayland",
+                None,
+            );
+        }
+        let reused = crate::ui::has_x11_display();
+        let h = Harness::start();
+        h.select(ALPHA);
+        let weak = |which: Which| -> Box<dyn Fn() -> bool> {
+            let app = h.app.borrow();
+            match which {
+                Which::About => {
+                    let d = app.about.as_ref().unwrap().as_weak();
+                    Box::new(move || d.upgrade().is_some())
+                }
+                Which::Settings => {
+                    let d = app.settings.as_ref().unwrap().as_weak();
+                    Box::new(move || d.upgrade().is_some())
+                }
+                Which::Error => {
+                    let d = app.error.as_ref().unwrap().as_weak();
+                    Box::new(move || d.upgrade().is_some())
+                }
+                Which::Delete => {
+                    let d = app.delete.as_ref().unwrap().0.as_weak();
+                    Box::new(move || d.upgrade().is_some())
+                }
+            }
+        };
+        let open = |which: Which| match which {
+            Which::About => h.ui.invoke_open_about(),
+            Which::Settings => h.ui.invoke_open_settings(),
+            Which::Error => h.app.borrow_mut().show_error(Failure::Launch, "x".into()),
+            Which::Delete => h.ui.invoke_delete_shader_cache(),
+        };
+        for which in [Which::About, Which::Settings, Which::Error, Which::Delete] {
+            open(which);
+            let first = weak(which);
+            // Opening a dialog that is showing only focuses it.
+            open(which);
+            assert!(first(), "{which:?} kept while showing");
+            dispatch_close(&h, which);
+            open(which);
+            assert!(h.visible(which));
+            assert_eq!(first(), reused, "{which:?} reused: {reused}");
+            dispatch_close(&h, which);
+        }
     }
 
     #[test]
