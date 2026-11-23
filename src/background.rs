@@ -138,16 +138,28 @@ fn read_lines(
     use std::io::{BufRead, Read};
     let mut reader = std::io::BufReader::new(reader);
     let mut buf = Vec::new();
+    // The start of a character a cut split, carried to the next piece.
+    let mut carried = Vec::new();
     // Whether the last piece was cut from a longer line.
     let mut cut = false;
     loop {
         buf.clear();
-        let limit = u64::try_from(MAX_LINE).unwrap_or(u64::MAX);
+        buf.append(&mut carried);
+        let limit = u64::try_from(MAX_LINE - buf.len()).unwrap_or(u64::MAX);
         if (&mut reader).take(limit).read_until(b'\n', &mut buf)? == 0 {
+            // The end, possibly with a character a cut split and the output
+            // never finished.
+            if !buf.is_empty() {
+                emit(String::from_utf8_lossy(&buf).into_owned());
+            }
             return Ok(());
         }
         // A full piece with no newline: the line goes on past it.
         let full = buf.len() == MAX_LINE && !buf.ends_with(b"\n");
+        if full {
+            let split = incomplete_utf8_tail(&buf);
+            carried.extend(buf.drain(buf.len() - split..));
+        }
         let line = match buf.strip_suffix(b"\n") {
             Some(line) => line.strip_suffix(b"\r").unwrap_or(line),
             // A `\r` at the cut may be half of a `\r\n`.
@@ -162,6 +174,19 @@ fn read_lines(
             return Ok(());
         }
     }
+}
+
+/// How many bytes at the end of `bytes` begin a UTF-8 character that is not
+/// complete yet (0 to 3), so a cut there would split it.
+fn incomplete_utf8_tail(bytes: &[u8]) -> usize {
+    (1..=bytes.len().min(3))
+        .find(|&len| {
+            let tail = &bytes[bytes.len() - len..];
+            // Starts at a lead byte, and is a valid but unfinished sequence.
+            tail[0] & 0xC0 == 0xC0
+                && matches!(std::str::from_utf8(tail), Err(e) if e.error_len().is_none())
+        })
+        .unwrap_or(0)
 }
 
 /// Wait for `child` on a watcher thread and report its exit as
@@ -534,5 +559,60 @@ mod tests {
         let mut long = vec![b'z'; MAX_LINE + 3];
         long.push(b'\n');
         assert_eq!(collect(&long), ["z".repeat(MAX_LINE), "zzz".to_string()]);
+    }
+
+    /// A cut never splits a UTF-8 character: the pieces of a long line join
+    /// back to it, whatever the characters' widths.
+    #[test]
+    fn cuts_fall_between_characters() {
+        use super::MAX_LINE;
+        let collect = |input: &[u8]| {
+            let mut lines = Vec::new();
+            read_lines(input, |line| {
+                lines.push(line);
+                true
+            })
+            .unwrap();
+            lines
+        };
+        for text in [
+            "日".repeat(3000),
+            "🎮".repeat(2500),
+            format!("a{}", "é".repeat(5000)),
+        ] {
+            let lines = collect(format!("{text}\n").as_bytes());
+            assert!(lines.len() > 1, "cut into pieces");
+            assert!(lines.iter().all(|line| line.len() <= MAX_LINE));
+            assert!(!lines.iter().any(|line| line.contains('\u{FFFD}')));
+            assert_eq!(lines.concat(), text);
+        }
+
+        // An unfinished character at the very end still comes through.
+        let mut truncated = vec![b'x'; MAX_LINE - 1];
+        truncated.push(0xE6);
+        assert_eq!(
+            collect(&truncated),
+            ["x".repeat(MAX_LINE - 1), "\u{FFFD}".to_string()]
+        );
+        // Bytes that are not UTF-8 at a cut are still decoded lossily.
+        let mut invalid = vec![b'y'; MAX_LINE - 1];
+        invalid.extend_from_slice(b"\xE6z\n");
+        assert_eq!(
+            collect(&invalid),
+            ["y".repeat(MAX_LINE - 1), "\u{FFFD}z".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_incomplete_character_at_the_end_is_measured() {
+        use super::incomplete_utf8_tail;
+        assert_eq!(incomplete_utf8_tail(b"abc"), 0);
+        assert_eq!(incomplete_utf8_tail("日".as_bytes()), 0);
+        assert_eq!(incomplete_utf8_tail(&"日".as_bytes()[..2]), 2);
+        assert_eq!(incomplete_utf8_tail(&"🎮".as_bytes()[..3]), 3);
+        assert_eq!(incomplete_utf8_tail(&"🎮".as_bytes()[..1]), 1);
+        // Continuation bytes without their lead are not a character start.
+        assert_eq!(incomplete_utf8_tail(&"日".as_bytes()[1..]), 0);
+        assert_eq!(incomplete_utf8_tail(b""), 0);
     }
 }
