@@ -4,6 +4,12 @@
 pub const MAX_LOG_LINES: usize = 500;
 /// Extra lines allowed before a trim runs, so trimming is not per-line work.
 pub const TRIM_SLACK: usize = 50;
+/// Cap for the log's size: every change re-lays out the whole text on the UI
+/// thread, so 500 long lines (launch output without newlines arrives in
+/// pieces of up to 8 KiB) would freeze the window for most of a second.
+pub const MAX_LOG_BYTES: usize = 128 * 1024;
+/// Extra bytes allowed before a size trim runs.
+pub const BYTE_SLACK: usize = 16 * 1024;
 
 /// The log as one string, every line terminated by `\n` so the newest line
 /// sits above a blank row the horizontal scrollbar can overlay.
@@ -48,18 +54,49 @@ impl LogBuffer {
         self.text.push('\n');
         self.lines += 1 + line.matches('\n').count();
         self.revision = self.revision.wrapping_add(1);
-        if self.lines <= MAX_LOG_LINES + TRIM_SLACK {
+        let mut removed = 0;
+        if self.lines > MAX_LOG_LINES + TRIM_SLACK {
+            removed += self.lines - MAX_LOG_LINES;
+            let cut = self
+                .text
+                .match_indices('\n')
+                .nth(removed - 1)
+                .map_or(self.text.len(), |(index, _)| index + 1);
+            self.text.drain(..cut);
+            self.lines = MAX_LOG_LINES;
+        }
+        if self.text.len() > MAX_LOG_BYTES + BYTE_SLACK {
+            removed += self.trim_to_bytes(MAX_LOG_BYTES);
+        }
+        self.trimmed += removed;
+        removed
+    }
+
+    /// Drop the oldest whole lines until the text fits in `max` bytes,
+    /// keeping at least the newest line. Returns how many lines went.
+    fn trim_to_bytes(&mut self, max: usize) -> usize {
+        let excess = self.text.len().saturating_sub(max);
+        if excess == 0 {
             return 0;
         }
-        let removed = self.lines - MAX_LOG_LINES;
-        let cut = self
-            .text
-            .match_indices('\n')
-            .nth(removed - 1)
-            .map_or(self.text.len(), |(index, _)| index + 1);
+        // Searched as bytes: `excess` need not fall on a character boundary,
+        // and `\n` never occurs inside a multi-byte character.
+        let bytes = self.text.as_bytes();
+        // The text ends with `\n`: the newest line starts after the one
+        // before it, and is kept.
+        let newest_start = bytes[..bytes.len() - 1]
+            .iter()
+            .rposition(|&byte| byte == b'\n')
+            .map_or(0, |index| index + 1);
+        // Cut after the line holding the excess's last byte.
+        let cut = bytes[excess - 1..]
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .map_or(newest_start, |index| excess + index)
+            .min(newest_start);
+        let removed = self.text[..cut].matches('\n').count();
         self.text.drain(..cut);
-        self.lines = MAX_LOG_LINES;
-        self.trimmed += removed;
+        self.lines -= removed;
         removed
     }
 
@@ -148,5 +185,49 @@ mod tests {
         }
         assert!(removed > 0);
         assert_eq!(log.trimmed_total(), removed);
+    }
+
+    /// Long lines are trimmed by size too, whole lines from the top, with the
+    /// line count and the trimmed total kept in step with the text.
+    #[test]
+    fn long_lines_are_trimmed_to_the_size_cap() {
+        use super::{BYTE_SLACK, MAX_LOG_BYTES};
+        // ASCII, and three-byte characters so the cut point lands inside
+        // characters.
+        for piece in ["x".repeat(8 * 1024), "日".repeat(2730)] {
+            let mut log = LogBuffer::default();
+            let mut removed = 0;
+            for i in 0..2000 {
+                removed += log.append(&format!("{i} {piece}"));
+                let text = log.text();
+                assert!(text.len() <= MAX_LOG_BYTES + BYTE_SLACK, "{}", text.len());
+                assert_eq!(log.line_count(), text.matches('\n').count());
+                assert_eq!(log.trimmed_total(), removed);
+                assert!(text.ends_with(&format!("] {i} {piece}\n")));
+                // Only whole lines go: the text starts at a line's stamp.
+                assert!(text.starts_with('['));
+            }
+            assert!(log.line_count() < MAX_LOG_LINES);
+        }
+    }
+
+    #[test]
+    fn a_line_longer_than_the_size_cap_is_kept_alone() {
+        use super::{BYTE_SLACK, MAX_LOG_BYTES};
+        let mut log = LogBuffer::default();
+        log.append("first");
+        let huge = "z".repeat(MAX_LOG_BYTES + BYTE_SLACK + 1);
+        assert_eq!(log.append(&huge), 1);
+        assert_eq!(log.line_count(), 1);
+        assert!(log.text().ends_with(&format!("{huge}\n")));
+    }
+
+    #[test]
+    fn a_full_log_of_ordinary_lines_is_not_trimmed_by_size() {
+        let mut log = LogBuffer::default();
+        for i in 0..MAX_LOG_LINES {
+            assert_eq!(log.append(&format!("{i:>3} {}", "o".repeat(200))), 0);
+        }
+        assert_eq!(log.line_count(), MAX_LOG_LINES);
     }
 }
