@@ -71,47 +71,19 @@ mod tests {
         assert!(!error.is_empty());
     }
 
-    /// A private Xvfb server on a free display, killed on drop.
-    struct Xvfb(std::process::Child, String);
-
-    impl Xvfb {
-        /// `None` when Xvfb is not installed.
-        fn start() -> Option<Self> {
-            use std::io::BufRead as _;
-            let mut child = std::process::Command::new("Xvfb")
-                .args(["-displayfd", "1", "-nolisten", "tcp"])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .ok()?;
-            let mut line = String::new();
-            std::io::BufReader::new(child.stdout.take()?)
-                .read_line(&mut line)
-                .ok()?;
-            Some(Xvfb(child, format!(":{}", line.trim())))
-        }
-    }
-
-    impl Drop for Xvfb {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
     #[test]
     fn a_marked_dialog_is_a_modal_transient_of_its_parent() {
         use x11rb::connection::Connection as _;
         use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, CreateWindowAux, WindowClass};
 
         if !is_child() {
-            let Some(server) = Xvfb::start() else {
+            let Some(server) = crate::test_support::Xvfb::start() else {
                 eprintln!("skipped: Xvfb is not installed");
                 return;
             };
             return run_in_child(
                 "x11_dialog::tests::a_marked_dialog_is_a_modal_transient_of_its_parent",
-                &[("DISPLAY", OsStr::new(&server.1))],
+                &[("DISPLAY", OsStr::new(server.display()))],
                 &[],
             );
         }

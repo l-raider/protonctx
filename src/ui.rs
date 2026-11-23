@@ -213,4 +213,72 @@ mod tests {
         let failed = new_dialog(|| Err::<(), _>(slint::PlatformError::NoPlatform));
         assert!(failed.is_err());
     }
+
+    /// The About dialog grows with a large desktop font (on the real winit
+    /// backend, under Xvfb), so its OK button stays in the window.
+    #[test]
+    fn the_about_dialog_grows_to_keep_its_button_in_the_window() {
+        use slint::ComponentHandle as _;
+        use slint::platform::{PointerEventButton, WindowEvent};
+        if !is_child() {
+            let Some(server) = crate::test_support::Xvfb::start() else {
+                eprintln!("skipped: Xvfb is not installed");
+                return;
+            };
+            return run_in_child(
+                "ui::tests::the_about_dialog_grows_to_keep_its_button_in_the_window",
+                &[("DISPLAY", OsStr::new(server.display()))],
+                &["WAYLAND_DISPLAY", "FLATPAK_ID"],
+            );
+        }
+        select_backend().unwrap();
+        let dialogs: Vec<_> = [13.333_f32, 20.0, 26.0]
+            .into_iter()
+            .map(|font_size| {
+                let mut tokens =
+                    crate::theme::build(&crate::system_theme::preset(&Default::default(), false));
+                tokens.font_size = font_size;
+                let dialog = new_dialog(super::AboutDialog::new).unwrap();
+                super::apply_theme(&dialog, &tokens);
+                dialog.set_version("protonctx v1.5.3".into());
+                let pressed = std::rc::Rc::new(std::cell::Cell::new(false));
+                let p = pressed.clone();
+                dialog.on_ok(move || p.set(true));
+                dialog.show().unwrap();
+                (dialog, pressed)
+            })
+            .collect();
+        slint::Timer::single_shot(std::time::Duration::from_millis(500), || {
+            let _ = slint::quit_event_loop();
+        });
+        slint::run_event_loop_until_quit().unwrap();
+
+        let heights: Vec<u32> = dialogs
+            .iter()
+            .map(|(d, _)| d.window().size().height)
+            .collect();
+        assert!(
+            heights[0] <= 201 && heights[1] > heights[0] && heights[2] > heights[1],
+            "{heights:?}"
+        );
+        for (dialog, pressed) in &dialogs {
+            let window = dialog.window();
+            let size = window.size().to_logical(window.scale_factor());
+            // Somewhere in the window's bottom-right quarter is the OK button.
+            let found = (0..(size.height / 2.0) as i32).any(|dy| {
+                (0..(size.width / 2.0) as i32).step_by(4).any(|dx| {
+                    let position = slint::LogicalPosition::new(
+                        size.width - 1.0 - dx as f32,
+                        size.height - 1.0 - dy as f32,
+                    );
+                    let button = PointerEventButton::Left;
+                    window.dispatch_event(WindowEvent::PointerMoved { position });
+                    window.dispatch_event(WindowEvent::PointerPressed { position, button });
+                    window.dispatch_event(WindowEvent::PointerReleased { position, button });
+                    pressed.get()
+                })
+            });
+            assert!(found, "OK in a {size:?} window");
+        }
+    }
 }

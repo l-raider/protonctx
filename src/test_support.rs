@@ -82,3 +82,37 @@ pub fn run_in_child(name: &str, set: &[(&str, &std::ffi::OsStr)], unset: &[&str]
         "child test {name} failed:\n{stdout}\n{stderr}"
     );
 }
+
+/// A private Xvfb server on a free display, killed on drop: for tests that
+/// need a real X server (and the winit backend on it).
+pub struct Xvfb(std::process::Child, String);
+
+impl Xvfb {
+    /// `None` when Xvfb is not installed.
+    pub fn start() -> Option<Self> {
+        use std::io::BufRead as _;
+        let mut child = std::process::Command::new("Xvfb")
+            .args(["-displayfd", "1", "-nolisten", "tcp"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()?;
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take()?)
+            .read_line(&mut line)
+            .ok()?;
+        Some(Xvfb(child, format!(":{}", line.trim())))
+    }
+
+    /// The `DISPLAY` value that reaches the server.
+    pub fn display(&self) -> &str {
+        &self.1
+    }
+}
+
+impl Drop for Xvfb {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}

@@ -704,3 +704,60 @@ fn the_log_line_count_matches_the_laid_out_lines() {
     }
     assert_eq!(height_of(&mixed), height_of(&plain));
 }
+
+/// The delete confirmation keeps Yes and No in its fixed window with a
+/// large desktop font or a long cache path: the message scrolls instead.
+#[test]
+fn the_delete_dialog_keeps_its_buttons_with_large_text() {
+    let _platform = platform();
+    let message = |path: &str| {
+        format!(
+            "This will permanently delete the shader cache directory:\n\n{path}\n\n\
+             Shader caches are rebuilt automatically the next time the game runs, \
+             but for best results close the game before deleting."
+        )
+    };
+    let short = "/home/u/.local/share/Steam/steamapps/shadercache/311690";
+    let long =
+        "/run/media/someone/External Games Drive 2TB/SteamLibrary/steamapps/shadercache/311690";
+    for (font_size, path) in [
+        (13.333, short),
+        (18.667, short),
+        (20.0, short),
+        (26.0, short),
+        (16.0, long),
+    ] {
+        let mut tokens =
+            crate::theme::build(&crate::system_theme::preset(&Default::default(), false));
+        tokens.font_size = font_size;
+        let dialog = DeleteCacheDialog::new().unwrap();
+        crate::ui::apply_theme(&dialog, &tokens);
+        let calls = Rc::new(Calls::default());
+        let c = calls.clone();
+        dialog.on_yes(move || c.push("yes"));
+        let c = calls.clone();
+        dialog.on_no(move || c.push("no"));
+        dialog.set_message(message(path).into());
+        dialog.show().unwrap();
+        let window = dialog.window();
+        window.set_size(slint::LogicalSize::new(520.0, 230.0));
+
+        // Click across the button row's band until both buttons answered.
+        let mut answered = std::collections::BTreeSet::new();
+        'scan: for y in (120..230).rev().step_by(5) {
+            for x in (200..520).step_by(10) {
+                click(window, x as f32, y as f32, PointerEventButton::Left);
+                answered.extend(calls.take());
+                if answered.len() == 2 {
+                    break 'scan;
+                }
+            }
+        }
+        assert_eq!(
+            answered.into_iter().collect::<Vec<_>>(),
+            ["no", "yes"],
+            "font {font_size}, path {path}"
+        );
+        dialog.hide().unwrap();
+    }
+}
