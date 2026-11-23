@@ -85,20 +85,17 @@ component HeaderCell {
 // A column-resize grip, 10 px wide and centred on a column's right edge.
 component ResizeGrip {
     in-out property <length> column-width;
-    property <length> start;
     width: 10px;
     TouchArea {
         mouse-cursor: col-resize;
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.down {
-                root.start = root.column-width;
-            }
-        }
+        // The grip moves with the edge it drags, so `mouse-x` is measured
+        // from where the grip is now: each move adds the pointer's offset
+        // from its pressed position on the grip, keeping the grip under it.
         moved => {
             if self.pressed {
                 root.column-width = max(
                     TableMetrics.min-column,
-                    root.start + self.mouse-x - self.pressed-x);
+                    root.column-width + self.mouse-x - self.pressed-x);
             }
         }
     }

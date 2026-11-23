@@ -508,3 +508,55 @@ fn dialog_keys_dismiss_or_pick_the_default() {
     key(settings.window(), Key::Escape);
     assert_eq!(calls.take(), ["ok", "ok"]);
 }
+
+/// A column-resize grip follows the pointer however the drag is split into
+/// move events (the grip moves with the edge it drags).
+#[test]
+fn a_resize_grip_drag_follows_the_pointer() {
+    let _platform = platform();
+    let tokens = crate::theme::build(&crate::system_theme::preset(&Default::default(), true));
+    let main = MainWindow::new().unwrap();
+    crate::ui::apply_theme(&main, &tokens);
+    main.set_rows(slint::ModelRc::new(slint::VecModel::from(rows())));
+    main.show().unwrap();
+    let window = main.window();
+    window.set_size(slint::LogicalSize::new(760.0, 520.0));
+    let calls = Rc::new(Calls::default());
+    let c = calls.clone();
+    main.on_header_clicked(move |column| c.push(column.to_string()));
+
+    // The first x along the header whose click sorts the App ID column.
+    let app_id_start = || {
+        (150..450)
+            .find(|&x| {
+                click(window, x as f32, 48.0, PointerEventButton::Left);
+                calls.take() == ["1"]
+            })
+            .unwrap()
+    };
+    let drag = |from: f32, steps: i32, step: f32| {
+        let at = |x: f32| LogicalPosition::new(x, 48.0);
+        pointer(window, from, 48.0);
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: at(from),
+            button,
+        });
+        for i in 1..=steps {
+            pointer(window, from + i as f32 * step, 48.0);
+        }
+        let to = from + steps as f32 * step;
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: at(to),
+            button,
+        });
+    };
+
+    let start = app_id_start();
+    // The grip is centred on the edge, 5 px left of the first App ID x.
+    let grip = (start - 5) as f32;
+    drag(grip, 30, 1.0);
+    assert_eq!(app_id_start(), start + 30, "a slow drag right");
+    drag(grip + 30.0, 40, -1.0);
+    assert_eq!(app_id_start(), start - 10, "a slow drag left");
+}
