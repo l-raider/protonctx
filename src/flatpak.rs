@@ -19,7 +19,7 @@
 //! Both are checked so a sandbox is still detected if one signal is absent on an
 //! unusual installation. Outside a sandbox neither is present.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -156,7 +156,7 @@ fn desktop_entry_installed(id: &str) -> bool {
 /// call gives up after [`HOST_QUERY_TIMEOUT`], so a hung host D-Bus or portal costs
 /// the fallback path, not a stuck launch; `--watch-bus` asks the host to end the
 /// query when the killed `flatpak-spawn` goes away.
-pub fn resolve_host_path(path: &str) -> Option<String> {
+pub fn resolve_host_path(path: &Path) -> Option<PathBuf> {
     if !is_doc_path(path) {
         return None;
     }
@@ -170,14 +170,16 @@ pub fn resolve_host_path(path: &str) -> Option<String> {
     if !output.status.success() {
         return None;
     }
-    document_origin(&String::from_utf8_lossy(&output.stdout))
+    document_origin(&output.stdout)
 }
 
 /// The real path in `flatpak document-info` output: its `origin: <path>` line.
-fn document_origin(info: &str) -> Option<String> {
-    info.lines()
-        .find_map(|line| line.strip_prefix("origin: "))
-        .map(|origin| origin.trim().to_string())
+/// Read as bytes, since a path need not be UTF-8.
+fn document_origin(info: &[u8]) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+    info.split(|&byte| byte == b'\n')
+        .find_map(|line| line.strip_prefix(b"origin: "))
+        .map(|origin| PathBuf::from(std::ffi::OsStr::from_bytes(origin.trim_ascii())))
 }
 
 /// Run `cmd` and collect its stdout, or kill it and return `None` once
@@ -209,11 +211,10 @@ fn output_within(mut cmd: Command, timeout: Duration) -> Option<Output> {
 }
 
 /// Whether `path` is a document-portal alias (`/run/user/<uid>/doc/<docid>/...`).
-fn is_doc_path(path: &str) -> bool {
+fn is_doc_path(path: &Path) -> bool {
     // /run/user/<uid>/doc/<...>
     path.strip_prefix("/run/user/")
-        .map(|rest| rest.split('/').nth(1) == Some("doc"))
-        .unwrap_or(false)
+        .is_ok_and(|rest| rest.iter().nth(1) == Some("doc".as_ref()))
 }
 
 #[cfg(test)]
@@ -238,14 +239,15 @@ mod tests {
 
     #[test]
     fn doc_path_detection() {
-        assert!(is_doc_path(
+        let is_doc = |path: &str| is_doc_path(Path::new(path));
+        assert!(is_doc(
             "/run/user/1000/doc/O9IM4y7CjO949_dSnoxh2g/trainer.exe"
         ));
-        assert!(is_doc_path("/run/user/0/doc/abc123/file.txt"));
+        assert!(is_doc("/run/user/0/doc/abc123/file.txt"));
         // Not named `doc` after the uid, or not under /run/user at all.
-        assert!(!is_doc_path("/run/user/1000/foo/trainer.exe"));
-        assert!(!is_doc_path("/home/user/trainer.exe"));
-        assert!(!is_doc_path("/run/other/1000/doc/x"));
+        assert!(!is_doc("/run/user/1000/foo/trainer.exe"));
+        assert!(!is_doc("/home/user/trainer.exe"));
+        assert!(!is_doc("/run/other/1000/doc/x"));
     }
 
     #[test]
@@ -255,10 +257,17 @@ mod tests {
                     origin: /mnt/games/Trainer/trainer.exe\n\
                     permissions:\n";
         assert_eq!(
-            document_origin(info).as_deref(),
-            Some("/mnt/games/Trainer/trainer.exe")
+            document_origin(info.as_bytes()).as_deref(),
+            Some(Path::new("/mnt/games/Trainer/trainer.exe"))
         );
-        assert_eq!(document_origin("id: x\n"), None);
+        assert_eq!(document_origin(b"id: x\n"), None);
+        // A non-UTF-8 origin keeps its bytes.
+        assert_eq!(
+            document_origin(b"origin: /mnt/Tr\xE4iner.exe\n").map(PathBuf::into_os_string),
+            Some(std::os::unix::ffi::OsStringExt::from_vec(
+                b"/mnt/Tr\xE4iner.exe".to_vec()
+            ))
+        );
     }
 
     #[test]
@@ -283,7 +292,7 @@ mod tests {
     fn resolve_host_path_ignores_non_doc_paths() {
         // Non-doc paths should pass through unchanged (return None) without
         // spawning any subprocess.
-        assert_eq!(resolve_host_path("/home/user/trainer.exe"), None);
+        assert_eq!(resolve_host_path(Path::new("/home/user/trainer.exe")), None);
     }
 
     #[test]
@@ -438,11 +447,14 @@ mod tests {
             return;
         }
         assert_eq!(
-            resolve_host_path("/run/user/1000/doc/abc/t.exe").as_deref(),
-            Some("/mnt/real/t.exe")
+            resolve_host_path(Path::new("/run/user/1000/doc/abc/t.exe")).as_deref(),
+            Some(Path::new("/mnt/real/t.exe"))
         );
         // A failed query falls back to the verbatim path.
-        assert_eq!(resolve_host_path("/run/user/1000/doc/fail/t.exe"), None);
+        assert_eq!(
+            resolve_host_path(Path::new("/run/user/1000/doc/fail/t.exe")),
+            None
+        );
     }
 
     #[test]
@@ -457,6 +469,9 @@ mod tests {
                 &[],
             );
         }
-        assert_eq!(resolve_host_path("/run/user/1000/doc/abc/t.exe"), None);
+        assert_eq!(
+            resolve_host_path(Path::new("/run/user/1000/doc/abc/t.exe")),
+            None
+        );
     }
 }

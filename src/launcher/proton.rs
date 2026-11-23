@@ -5,7 +5,7 @@
 //! The `runinprefix` verb runs the given command via the prefix's Wine, which is what we
 //! want for arbitrary `.exe` files and Wine built-ins (winecfg, taskmgr, ...) alike.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::process::{Command, Stdio};
 
@@ -32,7 +32,7 @@ use super::{LaunchError, LaunchedProcess};
 /// tracks the lifetime of the launched executable, not just the wrapper script.
 pub fn run_in_prefix(
     game: &Game,
-    args: &[&str],
+    args: &[&OsStr],
     cwd: Option<&Path>,
 ) -> Result<LaunchedProcess, LaunchError> {
     let proton = game.proton_script().ok_or(LaunchError::NoProtonDir)?;
@@ -60,7 +60,10 @@ pub fn run_in_prefix(
         "{}{} runinprefix {} (prefix: {}{})",
         if flatpak { "flatpak-spawn --host " } else { "" },
         proton.display(),
-        args.join(" "),
+        args.iter()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(" "),
         compat_data.display(),
         cwd.map(|dir| format!(", in: {}", dir.display()))
             .unwrap_or_default(),
@@ -98,7 +101,7 @@ fn steam_env(game: &Game, compat_data: &Path) -> [(&'static str, OsString); 4] {
 /// Build the command that runs the Proton script directly on the host.
 fn direct_command(
     proton: &Path,
-    args: &[&str],
+    args: &[&OsStr],
     env: [(&str, OsString); 4],
     cwd: Option<&Path>,
 ) -> Command {
@@ -120,7 +123,7 @@ fn direct_command(
 /// forwarded by `flatpak-spawn` itself, matching the direct-launch semantics.
 fn flatpak_spawn_command(
     proton: &Path,
-    args: &[&str],
+    args: &[&OsStr],
     env: [(&str, OsString); 4],
     cwd: Option<&Path>,
 ) -> Command {
@@ -210,7 +213,12 @@ mod tests {
         let proton = Path::new("/mnt/card/steamapps/common/Proton - Experimental/proton");
         let dir = Path::new("/games/Trainer");
 
-        let cmd = direct_command(proton, &["/games/Trainer/t.exe"], env_of(&game), Some(dir));
+        let cmd = direct_command(
+            proton,
+            &[OsStr::new("/games/Trainer/t.exe")],
+            env_of(&game),
+            Some(dir),
+        );
         assert_eq!(cmd.get_program(), proton.as_os_str());
         assert_eq!(args_of(&cmd), ["runinprefix", "/games/Trainer/t.exe"]);
         assert_eq!(cmd.get_current_dir(), Some(dir));
@@ -223,7 +231,7 @@ mod tests {
             Some(std::ffi::OsStr::new("/home/u/.local/share/Steam"))
         );
 
-        let cmd = direct_command(proton, &["winecfg"], env_of(&game), None);
+        let cmd = direct_command(proton, &[OsStr::new("winecfg")], env_of(&game), None);
         assert_eq!(cmd.get_current_dir(), None);
     }
 
@@ -234,7 +242,7 @@ mod tests {
 
         let cmd = flatpak_spawn_command(
             proton,
-            &["/games/Trainer/t.exe"],
+            &[OsStr::new("/games/Trainer/t.exe")],
             env_of(&game),
             Some(Path::new("/games/Trainer")),
         );
@@ -254,7 +262,7 @@ mod tests {
             ]
         );
 
-        let cmd = flatpak_spawn_command(proton, &["winecfg"], env_of(&game), None);
+        let cmd = flatpak_spawn_command(proton, &[OsStr::new("winecfg")], env_of(&game), None);
         assert!(
             !args_of(&cmd)
                 .iter()
@@ -280,7 +288,9 @@ mod tests {
             std::fs::set_permissions(&proton, std::fs::Permissions::from_mode(0o644)).unwrap();
         }
 
-        let error = run_in_prefix(&game, &["winecfg"], None).err().unwrap();
+        let error = run_in_prefix(&game, &[OsStr::new("winecfg")], None)
+            .err()
+            .unwrap();
         let expected = format!("failed to start process `{}`: ", proton.display());
         assert!(error.to_string().starts_with(&expected), "{error}");
 
@@ -310,7 +320,12 @@ mod tests {
         let game = game_with_fake_proton(&root);
         let proton = root.join("Proton/proton");
 
-        let launched = run_in_prefix(&game, &["t.exe"], Some(Path::new("/games/Trainer"))).unwrap();
+        let launched = run_in_prefix(
+            &game,
+            &[OsStr::new("t.exe")],
+            Some(Path::new("/games/Trainer")),
+        )
+        .unwrap();
         assert!(
             launched
                 .command_line

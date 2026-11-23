@@ -59,7 +59,7 @@ impl std::error::Error for LaunchError {
 /// executable exits (it calls `subprocess.call`), waiting on the child is
 /// equivalent to waiting for the launched tool to finish.
 pub fn launch_tool(game: &Game, tool: &str) -> Result<LaunchedProcess, LaunchError> {
-    proton::run_in_prefix(game, &[tool], None)
+    proton::run_in_prefix(game, &[std::ffi::OsStr::new(tool)], None)
 }
 
 /// An executable the user picked, resolved for a launch: the path the host sees,
@@ -83,8 +83,7 @@ pub struct Executable {
 /// off the UI thread.
 pub fn resolve_executable(picked: &Path) -> Executable {
     let host_path = if crate::flatpak::running_in_flatpak() {
-        crate::flatpak::resolve_host_path(&picked.to_string_lossy())
-            .map_or_else(|| picked.to_path_buf(), PathBuf::from)
+        crate::flatpak::resolve_host_path(picked).unwrap_or_else(|| picked.to_path_buf())
     } else {
         picked.to_path_buf()
     };
@@ -94,11 +93,8 @@ pub fn resolve_executable(picked: &Path) -> Executable {
 
 /// Run a resolved executable in `game`'s prefix.
 pub fn run_executable(game: &Game, exe: &Executable) -> Result<LaunchedProcess, LaunchError> {
-    proton::run_in_prefix(
-        game,
-        &[&exe.host_path.to_string_lossy()],
-        exe.cwd.as_deref(),
-    )
+    // Passed as the path's bytes: a file name need not be UTF-8.
+    proton::run_in_prefix(game, &[exe.host_path.as_os_str()], exe.cwd.as_deref())
 }
 
 /// The working directory for a picked executable: the folder of `host_exe` (the path
@@ -292,5 +288,37 @@ mod tests {
         assert_eq!(working_dir(&missing, &missing), None);
         // A bare file name has no folder to start in.
         assert_eq!(working_dir(Path::new("t.exe"), Path::new("t.exe")), None);
+    }
+
+    /// A picked file whose name is not UTF-8 reaches Proton byte for byte.
+    #[test]
+    fn a_non_utf8_executable_path_reaches_proton_intact() {
+        use std::os::unix::ffi::OsStrExt as _;
+        if !is_child() {
+            return run_in_child(
+                "launcher::tests::a_non_utf8_executable_path_reaches_proton_intact",
+                &[],
+                &["FLATPAK_ID"],
+            );
+        }
+        let root = temp_dir("launcher_non_utf8");
+        let mut game = game_with_fake_proton(&root);
+        // The stand-in Proton checks that its argument names a real file.
+        let proton_dir = root.join("CheckingProton");
+        write_script(
+            &proton_dir.join("proton"),
+            "if [ -e \"$2\" ]; then echo FOUND; else echo MISSING; fi",
+        );
+        game.proton_dir = proton_dir.to_str().unwrap().to_string();
+        let exe = root
+            .join("Trainer")
+            .join(std::ffi::OsStr::from_bytes(b"Tr\xE4iner.exe"));
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, "MZ").unwrap();
+
+        let launched = run_executable(&game, &resolve_executable(&exe)).unwrap();
+        assert_eq!(output_of(launched).trim(), "FOUND");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }
