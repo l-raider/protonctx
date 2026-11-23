@@ -185,14 +185,17 @@ pub async fn pick_executable(initial_dir: Option<PathBuf>) -> BrowseOutcome {
 fn browse_outcome(result: ashpd::Result<Option<PathBuf>>) -> BrowseOutcome {
     match result {
         Ok(Some(path)) => BrowseOutcome::Picked(path),
-        // Portal cancel: no selection is not an error.
-        Ok(None) | Err(ashpd::Error::Response(_)) => BrowseOutcome::Nothing,
+        // Portal cancel: no selection is not an error. The other response
+        // ("ended in some other way") is the backend failing, and is one.
+        Ok(None) | Err(ashpd::Error::Response(ashpd::desktop::ResponseError::Cancelled)) => {
+            BrowseOutcome::Nothing
+        }
         Err(error) => BrowseOutcome::Failed(error.to_string()),
     }
 }
 
 /// `Ok(None)` means the response carried no usable local path; a cancelled
-/// dialog surfaces as `Err(ashpd::Error::Response(_))`.
+/// dialog surfaces as `Err(ashpd::Error::Response(ResponseError::Cancelled))`.
 async fn prompt_for_exe(initial_dir: Option<PathBuf>) -> ashpd::Result<Option<PathBuf>> {
     use ashpd::desktop::file_chooser::{FileFilter, OpenFileRequest};
 
@@ -398,6 +401,11 @@ mod tests {
         );
         assert!(matches!(
             browse_outcome(Err(ashpd::Error::NoResponse)),
+            BrowseOutcome::Failed(_)
+        ));
+        // A dialog that ended some other way (a backend failure) is reported.
+        assert!(matches!(
+            browse_outcome(Err(ashpd::Error::Response(ResponseError::Other))),
             BrowseOutcome::Failed(_)
         ));
     }
