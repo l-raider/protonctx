@@ -211,7 +211,7 @@ fn output_within(mut cmd: Command, timeout: Duration) -> Option<Output> {
 }
 
 /// Whether `path` is a document-portal alias (`/run/user/<uid>/doc/<docid>/...`).
-fn is_doc_path(path: &Path) -> bool {
+pub fn is_doc_path(path: &Path) -> bool {
     // /run/user/<uid>/doc/<...>
     path.strip_prefix("/run/user/")
         .is_ok_and(|rest| rest.iter().nth(1) == Some("doc".as_ref()))

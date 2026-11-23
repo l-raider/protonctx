@@ -359,15 +359,7 @@ impl App {
     fn browse_finished(&mut self, outcome: BrowseOutcome, game: crate::models::Game) {
         self.state.browsing = false;
         match outcome {
-            BrowseOutcome::Picked(path) => {
-                if self.state.remember_last_dir
-                    && let Some(parent) = path.parent()
-                    && let Err(error) = crate::config::save_last_dir(parent)
-                {
-                    eprintln!("protonctx: failed to save last directory: {error}");
-                }
-                self.launch_browsed(path, game);
-            }
+            BrowseOutcome::Picked(path) => self.launch_browsed(path, game),
             BrowseOutcome::Nothing => {}
             BrowseOutcome::Failed(error) => {
                 self.show_error(
@@ -402,6 +394,7 @@ impl App {
                 return;
             };
             with_app(&me, |app| {
+                app.remember_folder_of(&exe.host_path);
                 match crate::launcher::run_executable(&game, &exe) {
                     Ok(process) => app.start_launch(process, status),
                     Err(error) => {
@@ -410,6 +403,21 @@ impl App {
                 }
             });
         });
+    }
+
+    /// Remember the folder of a picked executable for the next file chooser,
+    /// if enabled. `host_exe` is the resolved pick: inside a Flatpak the
+    /// chooser may return a document-portal alias, whose folder holds only
+    /// that one file, so an unresolved alias is not remembered.
+    fn remember_folder_of(&self, host_exe: &Path) {
+        if !self.state.remember_last_dir || crate::flatpak::is_doc_path(host_exe) {
+            return;
+        }
+        if let Some(parent) = host_exe.parent()
+            && let Err(error) = crate::config::save_last_dir(parent)
+        {
+            eprintln!("protonctx: failed to save last directory: {error}");
+        }
     }
 
     /// Write non-empty `text` to the clipboard.
@@ -1301,6 +1309,72 @@ mod tests {
             h.error_message().starts_with("Failed to launch: no Proton"),
             "{}",
             h.error_message()
+        );
+    }
+
+    #[test]
+    fn a_portal_pick_in_flatpak_remembers_its_host_folder() {
+        if !is_child() {
+            use std::os::unix::fs::PermissionsExt as _;
+            let home = crate::test_support::temp_dir("app_flatpak_pick");
+            fake_home(&home);
+            // A host stand-in: the document portal resolves `ok` documents
+            // and fails others; every other host command succeeds.
+            let bin = home.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            let spawn = bin.join("flatpak-spawn");
+            std::fs::write(
+                &spawn,
+                "#!/bin/sh\ncase \"$4\" in document-info)\n\
+                 case \"$5\" in */ok/*) echo \"origin: /mnt/games/Trainer/t.exe\";; *) exit 1;; esac;;\n\
+                 esac\n",
+            )
+            .unwrap();
+            std::fs::set_permissions(&spawn, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let mut path = std::ffi::OsString::from(&bin);
+            path.push(":");
+            path.push(std::env::var_os("PATH").unwrap_or_default());
+            let (config, state) = (home.join("config"), home.join("state"));
+            run_in_child(
+                "app::tests::a_portal_pick_in_flatpak_remembers_its_host_folder",
+                &[
+                    ("HOME", home.as_os_str()),
+                    ("XDG_CONFIG_HOME", config.as_os_str()),
+                    ("XDG_STATE_HOME", state.as_os_str()),
+                    ("DBUS_SESSION_BUS_ADDRESS", OsStr::new(NO_BUS)),
+                    ("FLATPAK_ID", OsStr::new("io.github.l_raider.protonctx")),
+                    ("PATH", &path),
+                ],
+                &["DISPLAY", "WAYLAND_DISPLAY"],
+            );
+            let _ = std::fs::remove_dir_all(&home);
+            return;
+        }
+        let h = Harness::start();
+        h.select(ALPHA);
+        let game = h.app.borrow().state.selected_row().unwrap().to_game();
+        let pick = |path: &str| {
+            h.app
+                .borrow_mut()
+                .browse_finished(BrowseOutcome::Picked(PathBuf::from(path)), game.clone());
+            let app = h.app.clone();
+            run_until("the launch to start", move || {
+                app.borrow().state.launch_running
+            });
+            h.wait_launches();
+        };
+
+        // The folder the host sees, not the portal's one-file folder.
+        pick("/run/user/1000/doc/ok/t.exe");
+        assert_eq!(
+            crate::config::load_last_dir(),
+            Some(PathBuf::from("/mnt/games/Trainer"))
+        );
+        // An alias that cannot be resolved is not remembered.
+        pick("/run/user/1000/doc/unknown/t.exe");
+        assert_eq!(
+            crate::config::load_last_dir(),
+            Some(PathBuf::from("/mnt/games/Trainer"))
         );
     }
 
