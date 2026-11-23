@@ -53,6 +53,23 @@ impl From<std::io::Error> for SteamError {
     }
 }
 
+/// `error` as text, for a [`SteamError::Parse`] message.
+///
+/// The parser's own `Display` of a parse error slices its input snippet at
+/// byte 50, which panics when that byte falls inside a multi-byte character
+/// (steam-vdf-parser 0.1.2), and release builds abort on panic. The snippet
+/// is already capped at 50 characters, so this variant is formatted here.
+pub(crate) fn vdf_error_text(error: &steam_vdf_parser::Error) -> String {
+    match error {
+        steam_vdf_parser::Error::ParseError {
+            input,
+            offset,
+            context,
+        } => format!("Parse error at offset {offset}: {context} (near: \"{input}\")"),
+        other => other.to_string(),
+    }
+}
+
 /// Steam App ID for "Steamworks Common Redistributables", a shared non-game payload.
 const STEAMWORKS_COMMON_REDISTRIBUTABLES_APPID: u32 = 228980;
 

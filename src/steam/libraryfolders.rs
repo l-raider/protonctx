@@ -27,8 +27,9 @@ pub fn library_folders(steam_root: &Path) -> Result<Vec<PathBuf>, SteamError> {
     };
 
     let text = std::fs::read_to_string(&path)?;
-    let vdf =
-        parse_text(&text).map_err(|e| SteamError::Parse(format!("libraryfolders.vdf: {e}")))?;
+    let vdf = parse_text(&text).map_err(|e| {
+        SteamError::Parse(format!("libraryfolders.vdf: {}", super::vdf_error_text(&e)))
+    })?;
 
     // The root key is "libraryfolders"; its value is the object keyed by library id.
     let Some(libraryfolders) = vdf.as_obj() else {
@@ -144,5 +145,25 @@ mod tests {
         assert!(error.to_string().contains("not found"), "{error}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A parse error whose input snippet has a multi-byte character across
+    /// byte 50 is reported, not panicked on (the parser's own `Display`
+    /// slices there).
+    #[test]
+    fn a_parse_error_near_a_multi_byte_character_is_reported() {
+        let root = crate::test_support::temp_dir("lf_multibyte_error");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(
+            root.join("config").join(paths::LIBRARYFOLDERS_VDF),
+            format!("{{{}é rest\n", "a".repeat(48)),
+        )
+        .unwrap();
+
+        let error = library_folders(&root).unwrap_err().to_string();
+        assert!(error.contains("libraryfolders.vdf: Parse error"), "{error}");
+        assert!(error.contains('é'), "{error}");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

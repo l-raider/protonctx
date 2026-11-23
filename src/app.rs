@@ -254,13 +254,16 @@ impl App {
         }
         let me = self.me.clone();
         let _ = slint::spawn_local(async move {
-            if let Ok(outcome) = receiver.recv().await {
-                with_app(&me, |app| {
-                    app.state.games_loaded(outcome);
-                    app.sync_rows();
-                    app.sync();
-                });
-            }
+            // A closed channel means the thread died (a panic, in builds
+            // that unwind); without an outcome the refresh would never end.
+            let outcome = receiver.recv().await.unwrap_or_else(|_| {
+                LoadOutcome::Failed("Failed to discover games: the scan stopped".to_string())
+            });
+            with_app(&me, |app| {
+                app.state.games_loaded(outcome);
+                app.sync_rows();
+                app.sync();
+            });
         });
     }
 

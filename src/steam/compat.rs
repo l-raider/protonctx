@@ -164,7 +164,8 @@ pub fn compat_tool_map(steam_root: &Path) -> Result<HashMap<String, String>, Ste
     }
 
     let text = std::fs::read_to_string(&config_vdf)?;
-    let vdf = parse_text(&text).map_err(|e| SteamError::Parse(format!("config.vdf: {e}")))?;
+    let vdf = parse_text(&text)
+        .map_err(|e| SteamError::Parse(format!("config.vdf: {}", super::vdf_error_text(&e))))?;
 
     // Structure: root key "InstallConfigStore" → { Software → { Valve|valve → { Steam → { CompatToolMapping → { appid → { name } } } } } }.
     // `vdf.as_obj()` returns the object under the root key, so traversal starts at "Software".
@@ -756,5 +757,22 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// See `libraryfolders`: the parser's `Display` would panic on this.
+    #[test]
+    fn a_config_vdf_parse_error_near_a_multi_byte_character_is_reported() {
+        let root = crate::test_support::temp_dir("compat_multibyte_error");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(
+            root.join("config").join("config.vdf"),
+            format!("{{{}é rest of a corrupt file\n", "a".repeat(48)),
+        )
+        .unwrap();
+
+        let error = compat_tool_map(&root).unwrap_err().to_string();
+        assert!(error.contains("config.vdf: Parse error"), "{error}");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }
