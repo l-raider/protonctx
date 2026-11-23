@@ -79,6 +79,16 @@ pub fn delete_shader_cache(library: &Path, app_id: u32) -> std::io::Result<bool>
     }
 }
 
+/// Whether [`delete_shader_cache`] has something to delete for the game: a
+/// cache directory, or a symlink in its place (even a dangling one, e.g. to an
+/// unmounted disk). A regular file there is left alone, so it does not count.
+pub fn has_deletable_cache(library: &Path, app_id: u32) -> bool {
+    matches!(
+        CacheLeaf::of(&shader_cache_dir_for(library, app_id)),
+        Ok(CacheLeaf::Link | CacheLeaf::Dir)
+    )
+}
+
 /// The `flatpak-spawn --host rm` command that removes a checked cache path on
 /// the host: a link with `rm -f` (`rm` never follows the link it is given), a
 /// directory with `rm -rf --one-file-system`, which also refuses to cross into

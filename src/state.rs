@@ -60,8 +60,9 @@ pub struct State {
     pub selected: Option<usize>,
     pub sort_column: usize,
     pub sort: ColumnSort,
-    /// Whether the selected game has a shader cache directory (the context
-    /// menu's Delete Shader Cache item).
+    /// Whether the selected game has a shader cache to delete: a directory or
+    /// a symlink in its place (enables the context menu's Delete Shader Cache
+    /// item).
     pub selected_cache_exists: bool,
 
     pub log: LogBuffer,
@@ -114,11 +115,10 @@ impl State {
     pub fn select_row(&mut self, row: Option<usize>) {
         self.selected = row.filter(|row| *row < self.rows.len());
         self.selected_cache_exists = self.selected_row().is_some_and(|row| {
-            crate::steam::shadercache::shader_cache_dir_for(
+            crate::steam::shadercache::has_deletable_cache(
                 std::path::Path::new(&row.library_path),
                 row.app_id,
             )
-            .exists()
         });
     }
 
@@ -407,5 +407,37 @@ mod tests {
             state.shader_cache_deleted(&game, Err("denied".to_string())),
             Some("Failed to delete shader cache: denied".to_string())
         );
+    }
+
+    /// The Delete Shader Cache item is enabled exactly when deleting has
+    /// something to remove: a directory or a symlink (even a dangling one),
+    /// not a regular file.
+    #[test]
+    fn the_cache_item_follows_what_deleting_can_remove() {
+        let library = crate::test_support::temp_dir("state_cache_kinds");
+        let cache = |app_id: u32| crate::steam::shadercache::shader_cache_dir_for(&library, app_id);
+        std::fs::create_dir_all(cache(1)).unwrap();
+        std::os::unix::fs::symlink(library.join("unplugged-disk"), cache(2)).unwrap();
+        std::fs::write(cache(3), "").unwrap();
+        let rows = (1..=4)
+            .map(|app_id| {
+                let mut game = test_game("Game", app_id);
+                game.library_path = library.to_str().unwrap().to_string();
+                GameRow::from_game(&game)
+            })
+            .collect();
+        let mut state = State::new(true);
+        state.set_rows(rows);
+
+        let enabled: Vec<bool> = (0..4)
+            .map(|row| {
+                state.select_row(Some(row));
+                state.selected_cache_exists
+            })
+            .collect();
+        // A directory, a dangling link, a regular file, nothing.
+        assert_eq!(enabled, [true, true, false, false]);
+
+        std::fs::remove_dir_all(&library).ok();
     }
 }
