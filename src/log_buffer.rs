@@ -50,9 +50,16 @@ impl LogBuffer {
     }
 
     fn push_line(&mut self, line: &str) -> usize {
-        self.text.push_str(line);
-        self.text.push('\n');
-        self.lines += 1 + line.matches('\n').count();
+        // The view breaks lines at a lone `\r` and U+2028/2029 too (`\r\n`
+        // is one break), and its scroll math counts lines by `\n`: write
+        // every break as `\n`, which displays the same.
+        // Normalized with its terminator: a line ending in `\r` displays as
+        // one line, its `\r` and the `\n` forming one break.
+        let line = format!("{line}\n")
+            .replace("\r\n", "\n")
+            .replace(['\r', '\u{2028}', '\u{2029}'], "\n");
+        self.text.push_str(&line);
+        self.lines += line.matches('\n').count();
         self.revision = self.revision.wrapping_add(1);
         let mut removed = 0;
         if self.lines > MAX_LOG_LINES + TRIM_SLACK {
@@ -229,5 +236,23 @@ mod tests {
             assert_eq!(log.append(&format!("{i:>3} {}", "o".repeat(200))), 0);
         }
         assert_eq!(log.line_count(), MAX_LOG_LINES);
+    }
+
+    /// Every line break the view honours is written as `\n` and counted.
+    #[test]
+    fn every_displayed_line_break_counts_as_a_line() {
+        let mut log = LogBuffer::default();
+        log.append("progress 10%\rprogress 20%\r\ndone");
+        log.append("a\u{2028}b\u{2029}c");
+        // A Windows text-mode `\r\r\n`: two breaks, as displayed.
+        log.append("w\r\r\nx");
+        assert_eq!(log.line_count(), 3 + 3 + 3);
+        assert_eq!(log.line_count(), log.text().matches('\n').count());
+        assert!(!log.text().contains(['\r', '\u{2028}', '\u{2029}']));
+        assert!(log.text().ends_with("w\n\nx\n"));
+        // A trailing `\r` makes no extra line.
+        log.append("y\r");
+        assert_eq!(log.line_count(), 3 + 3 + 3 + 1);
+        assert!(log.text().ends_with("y\n"));
     }
 }

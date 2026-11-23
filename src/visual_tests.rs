@@ -678,3 +678,29 @@ fn a_new_error_message_starts_at_its_first_line() {
     dialog.show().unwrap();
     assert_eq!(dialog.get_message_offset(), 0.0);
 }
+
+/// The log counts its lines as the view lays them out, so the scroll math
+/// built on the line count (the trim compensation) matches the text.
+#[test]
+fn the_log_line_count_matches_the_laid_out_lines() {
+    let _platform = platform();
+    let tokens = crate::theme::build(&crate::system_theme::preset(&Default::default(), true));
+    let main = MainWindow::new().unwrap();
+    crate::ui::apply_theme(&main, &tokens);
+    main.show().unwrap();
+    let height_of = |log: &crate::log_buffer::LogBuffer| {
+        main.set_log_text(log.text().into());
+        main.get_log_content_height()
+    };
+
+    let mut mixed = crate::log_buffer::LogBuffer::default();
+    mixed.append("progress 10%\rprogress 20%\r\ndone");
+    mixed.append("a\u{2028}b\u{2029}c");
+    mixed.append("w\r\r\nx");
+    mixed.append("y\r");
+    let mut plain = crate::log_buffer::LogBuffer::default();
+    for _ in 0..mixed.line_count() {
+        plain.append("line");
+    }
+    assert_eq!(height_of(&mixed), height_of(&plain));
+}

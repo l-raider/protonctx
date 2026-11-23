@@ -87,6 +87,8 @@ export component MainWindow inherits Window {
     }
 
     property <length> log-line-height: log-input.preferred-height / max(1, root.log-lines + 1);
+    // The log text's laid-out height (read by the tests).
+    out property <length> log-content-height: log-input.preferred-height;
     property <bool> has-selection: root.selected >= 0;
 
     // Split: the table pane takes 420 of 420 + 140 px initially; both panes
