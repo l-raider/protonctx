@@ -130,11 +130,14 @@ impl State {
         } else {
             ColumnSort::Ascending
         };
-        let keep = self.selected_row().map(|row| row.app_id);
+        let keep = self
+            .selected_row()
+            .map(|row| (row.app_id, row.library_path.clone()));
         self.sort_column = column;
         self.sort = next;
         games::sort_games_by(&mut self.rows, column, next);
-        let restored = keep.and_then(|app_id| games::find_by_app_id(&self.rows, app_id));
+        let restored =
+            keep.and_then(|(app_id, library)| games::find_game(&self.rows, app_id, &library));
         self.select_row(restored);
     }
 
@@ -439,5 +442,24 @@ mod tests {
         assert_eq!(enabled, [true, true, false, false]);
 
         std::fs::remove_dir_all(&library).ok();
+    }
+
+    /// Sorting keeps the selection on the selected row when the same game
+    /// is installed in two libraries, not on the first copy found.
+    #[test]
+    fn sorting_keeps_the_selected_copy_of_a_game_in_two_libraries() {
+        let copy = |library: &str| {
+            GameRow::from_game(&crate::test_support::game(
+                "Broforce", 274190, "", library, "",
+            ))
+        };
+        let mut state = State::new(true);
+        state.set_rows(vec![copy("/mnt/old"), copy("/mnt/new")]);
+        state.select_row(Some(1));
+
+        state.sort_by_header(1);
+        assert_eq!(state.selected_row().unwrap().library_path, "/mnt/new");
+        state.sort_by_header(1);
+        assert_eq!(state.selected_row().unwrap().library_path, "/mnt/new");
     }
 }

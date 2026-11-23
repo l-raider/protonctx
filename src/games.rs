@@ -120,15 +120,18 @@ pub fn next_sort(current: ColumnSort) -> ColumnSort {
     }
 }
 
-pub fn find_by_app_id(rows: &[GameRow], app_id: u32) -> Option<usize> {
-    rows.iter().position(|row| row.app_id == app_id)
+/// The row of the game `app_id` installed in `library_path`. The app id alone
+/// is not unique: the same game can be found in two libraries (a stale
+/// manifest left behind by a move, or one library listed under two paths).
+pub fn find_game(rows: &[GameRow], app_id: u32, library_path: &str) -> Option<usize> {
+    rows.iter()
+        .position(|row| row.app_id == app_id && row.library_path == library_path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ColumnSort, GameRow, display_compat_tool, find_by_app_id, next_sort, sort_games,
-        sort_games_by,
+        ColumnSort, GameRow, display_compat_tool, find_game, next_sort, sort_games, sort_games_by,
     };
     use crate::test_support::game;
 
@@ -331,11 +334,20 @@ mod tests {
     }
 
     #[test]
-    fn finds_row_by_app_id() {
-        let rows = fixtures();
+    fn finds_a_row_by_app_id_and_library() {
+        let mut rows = fixtures();
+        let library = rows[1].library_path.clone();
 
-        assert_eq!(find_by_app_id(&rows, 204360), Some(1));
-        assert_eq!(find_by_app_id(&rows, 336060), Some(2));
-        assert_eq!(find_by_app_id(&rows, 1), None);
+        assert_eq!(find_game(&rows, 204360, &library), Some(1));
+        assert_eq!(find_game(&rows, 336060, &rows[2].library_path), Some(2));
+        assert_eq!(find_game(&rows, 1, &library), None);
+        assert_eq!(find_game(&rows, 204360, "/elsewhere"), None);
+
+        // The same game in a second library is a different row.
+        let mut copy = rows[1].clone();
+        copy.library_path = "/mnt/new".to_string();
+        rows.insert(0, copy);
+        assert_eq!(find_game(&rows, 204360, &library), Some(2));
+        assert_eq!(find_game(&rows, 204360, "/mnt/new"), Some(0));
     }
 }
