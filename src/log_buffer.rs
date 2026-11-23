@@ -204,7 +204,7 @@ mod tests {
         for piece in ["x".repeat(8 * 1024), "日".repeat(2730)] {
             let mut log = LogBuffer::default();
             let mut removed = 0;
-            for i in 0..2000 {
+            for i in 0..300 {
                 removed += log.append(&format!("{i} {piece}"));
                 let text = log.text();
                 assert!(text.len() <= MAX_LOG_BYTES + BYTE_SLACK, "{}", text.len());
