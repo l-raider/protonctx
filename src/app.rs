@@ -33,8 +33,6 @@ pub struct App {
     model: Rc<VecModel<GameRowData>>,
     tokens: AppTokens,
     launch_sender: async_channel::Sender<LaunchEvent>,
-    /// Kept alive: on X11 the owner of a copied text serves it.
-    clipboard: Option<arboard::Clipboard>,
     /// Log revision and trimmed-line count the window last showed.
     shown_log: (u64, usize),
     /// X11 windows already marked as dialogs of the main window. Hiding a
@@ -65,7 +63,6 @@ pub fn start(ui: &MainWindow, tokens: AppTokens) -> Shared {
             model,
             tokens,
             launch_sender,
-            clipboard: None,
             shown_log: (0, 0),
             parented: Rc::default(),
             about: None,
@@ -420,24 +417,15 @@ impl App {
         }
     }
 
-    /// Write non-empty `text` to the clipboard.
+    /// Write non-empty `text` to the clipboard, through the window: its
+    /// backend serves the clipboard of the display it is on, X11 or native
+    /// Wayland alike.
     fn copy(&mut self, text: String) {
         if text.is_empty() {
             return;
         }
-        if self.clipboard.is_none() {
-            match arboard::Clipboard::new() {
-                Ok(clipboard) => self.clipboard = Some(clipboard),
-                Err(error) => {
-                    eprintln!("protonctx: no clipboard: {error}");
-                    return;
-                }
-            }
-        }
-        if let Some(clipboard) = &mut self.clipboard
-            && let Err(error) = clipboard.set_text(text)
-        {
-            eprintln!("protonctx: could not copy: {error}");
+        if let Some(ui) = self.ui.upgrade() {
+            ui.invoke_copy_text(text.into());
         }
     }
 
@@ -861,9 +849,24 @@ mod tests {
         receiver: Mutex<mpsc::Receiver<Message>>,
     }
 
+    thread_local! {
+        /// The headless platform's clipboard.
+        static CLIPBOARD: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    fn clipboard() -> Option<String> {
+        CLIPBOARD.with(|clipboard| clipboard.borrow().clone())
+    }
+
     impl Platform for Headless {
         fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
             Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+        }
+
+        fn set_clipboard_text(&self, text: &str, clipboard: slint::platform::Clipboard) {
+            if clipboard == slint::platform::Clipboard::DefaultClipboard {
+                CLIPBOARD.with(|slot| *slot.borrow_mut() = Some(text.to_string()));
+            }
         }
 
         fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
@@ -1602,11 +1605,13 @@ mod tests {
         assert!(!h.visible(Which::Delete));
     }
 
+    /// The copy actions put the selected game's paths on the clipboard of
+    /// the window's platform (X11 or Wayland in the app), with no X display.
     #[test]
-    fn copying_paths_without_a_clipboard_is_harmless() {
+    fn the_copy_actions_put_the_paths_on_the_clipboard() {
         if !is_child() {
             return in_fake_home(
-                "copying_paths_without_a_clipboard_is_harmless",
+                "the_copy_actions_put_the_paths_on_the_clipboard",
                 "app_copy",
                 None,
             );
@@ -1615,11 +1620,28 @@ mod tests {
         // Nothing selected: nothing to copy.
         h.ui.invoke_copy_compatdata();
         h.ui.invoke_copy_tool_path();
+        assert_eq!(clipboard(), None);
+
         h.select(ALPHA);
+        let library = steam_root(&home());
         h.ui.invoke_copy_compatdata();
+        assert_eq!(
+            clipboard(),
+            Some(
+                crate::steam::paths::app_compatdata_dir(&library, ALPHA)
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
         h.ui.invoke_copy_tool_path();
-        h.app.borrow_mut().copy(String::new());
-        assert!(h.app.borrow().clipboard.is_none());
+        let tool = library.join("steamapps/common/FakeProton");
+        assert_eq!(clipboard(), Some(tool.to_string_lossy().into_owned()));
+
+        // A game without a resolved tool has no path to copy: the clipboard
+        // keeps what it had.
+        h.select(BETA);
+        h.ui.invoke_copy_tool_path();
+        assert_eq!(clipboard(), Some(tool.to_string_lossy().into_owned()));
     }
 
     #[test]
@@ -1642,9 +1664,6 @@ mod tests {
         // 100 attempts 5 ms apart.
         run_for(Duration::from_millis(900));
         assert!(h.app.borrow().parented.borrow().is_empty());
-        // The clipboard cannot reach the display either.
-        h.ui.invoke_copy_tool_path();
-        assert!(h.app.borrow().clipboard.is_none());
 
         // A dialog dropped while waiting stops the retries.
         h.app.borrow_mut().about = None;

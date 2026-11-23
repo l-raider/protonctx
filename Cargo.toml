@@ -23,8 +23,6 @@ slint = { version = "1.19", default-features = false, features = [
 native-theme = { version = "0.7.2", default-features = false, features = ["linux"] }
 # Dialog hints (WM_TRANSIENT_FOR, dialog type) on X11; pure Rust connection.
 x11rb = "0.13"
-# Slint has no public clipboard API; its winit backend uses arboard too.
-arboard = { version = "3.6", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-channel = "2"
 # Timer for the launch-output batch window; already in the tree through ashpd.

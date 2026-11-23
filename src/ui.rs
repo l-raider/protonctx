@@ -281,4 +281,86 @@ mod tests {
             assert!(found, "OK in a {size:?} window");
         }
     }
+
+    /// On the real winit backend under Xvfb, copying puts the text on the X11
+    /// CLIPBOARD selection, where another client (a paste) reads it.
+    #[test]
+    fn copied_text_is_served_on_the_x11_clipboard() {
+        use slint::ComponentHandle as _;
+        use x11rb::connection::Connection as _;
+        use x11rb::protocol::Event;
+        use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, CreateWindowAux, WindowClass};
+        if !is_child() {
+            let Some(server) = crate::test_support::Xvfb::start() else {
+                eprintln!("skipped: Xvfb is not installed");
+                return;
+            };
+            return run_in_child(
+                "ui::tests::copied_text_is_served_on_the_x11_clipboard",
+                &[("DISPLAY", OsStr::new(server.display()))],
+                &["WAYLAND_DISPLAY", "FLATPAK_ID"],
+            );
+        }
+        select_backend().unwrap();
+        let main = super::MainWindow::new().unwrap();
+        main.show().unwrap();
+        slint::Timer::single_shot(std::time::Duration::from_millis(300), || {
+            let _ = slint::quit_event_loop();
+        });
+        slint::run_event_loop_until_quit().unwrap();
+        let copied = "/home/u/.local/share/Steam/steamapps/compatdata/274190";
+        main.invoke_copy_text(copied.into());
+
+        // Paste, as another X client: ask the CLIPBOARD owner for UTF-8 text.
+        let (conn, screen) = x11rb::connect(None).unwrap();
+        let root = conn.setup().roots[screen].root;
+        let window = conn.generate_id().unwrap();
+        conn.create_window(
+            0,
+            window,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            0,
+            &CreateWindowAux::new(),
+        )
+        .unwrap();
+        let atom = |name: &str| {
+            conn.intern_atom(false, name.as_bytes())
+                .unwrap()
+                .reply()
+                .unwrap()
+                .atom
+        };
+        let (clipboard, utf8, property) = (
+            atom("CLIPBOARD"),
+            atom("UTF8_STRING"),
+            atom("PROTONCTX_PASTE"),
+        );
+        conn.convert_selection(window, clipboard, utf8, property, x11rb::CURRENT_TIME)
+            .unwrap();
+        conn.flush().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let notified = loop {
+            match conn.poll_for_event().unwrap() {
+                Some(Event::SelectionNotify(event)) => break event,
+                Some(_) => {}
+                None if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                None => panic!("no answer from the clipboard owner"),
+            }
+        };
+        assert_eq!(notified.property, property, "the owner converted the text");
+        let reply = conn
+            .get_property(true, window, property, AtomEnum::ANY, 0, 1 << 16)
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(String::from_utf8(reply.value).unwrap(), copied);
+    }
 }

@@ -86,6 +86,15 @@ export component MainWindow inherits Window {
         log-input.copy();
     }
 
+    // Put `text` on the clipboard. Slint has no clipboard API, but a text
+    // input's copy reaches the clipboard of the display the window is on
+    // (X11, or Wayland without an X display).
+    public function copy-text(text: string) {
+        clipboard-input.text = text;
+        clipboard-input.select-all();
+        clipboard-input.copy();
+    }
+
     property <length> log-line-height: log-input.preferred-height / max(1, root.log-lines + 1);
     // The log text's laid-out height (read by the tests).
     out property <length> log-content-height: log-input.preferred-height;
@@ -536,6 +545,16 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Only the carrier for `copy-text`; never focused (disabled), so Tab
+    // cannot reach it.
+    clipboard-input := TextInput {
+        visible: false;
+        enabled: false;
+        read-only: true;
+        width: 0;
+        height: 0;
     }
 
     // While a dialog is open, an invisible layer swallows the mouse: clicks
