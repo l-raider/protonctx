@@ -178,7 +178,12 @@ pub enum BrowseOutcome {
 
 /// Prompt for a Windows executable through the XDG desktop portal.
 pub async fn pick_executable(initial_dir: Option<PathBuf>) -> BrowseOutcome {
-    match prompt_for_exe(initial_dir).await {
+    browse_outcome(prompt_for_exe(initial_dir).await)
+}
+
+/// Map the portal's answer (see [`prompt_for_exe`]) to a [`BrowseOutcome`].
+fn browse_outcome(result: ashpd::Result<Option<PathBuf>>) -> BrowseOutcome {
+    match result {
         Ok(Some(path)) => BrowseOutcome::Picked(path),
         // Portal cancel: no selection is not an error.
         Ok(None) | Err(ashpd::Error::Response(_)) => BrowseOutcome::Nothing,
@@ -207,11 +212,17 @@ async fn prompt_for_exe(initial_dir: Option<PathBuf>) -> ashpd::Result<Option<Pa
         .await?;
     let response = request.response()?;
 
-    Ok(response
-        .uris()
-        .iter()
-        .filter_map(|uri| url::Url::parse(uri.as_str()).ok())
-        .find_map(|uri| uri.to_file_path().ok()))
+    Ok(first_local_path(
+        response.uris().iter().map(|uri| uri.as_str()),
+    ))
+}
+
+/// The first of `uris` that names a local file, as a path; malformed and
+/// non-`file:` URIs are skipped.
+fn first_local_path<'a>(uris: impl IntoIterator<Item = &'a str>) -> Option<PathBuf> {
+    uris.into_iter()
+        .filter_map(|uri| url::Url::parse(uri).ok())
+        .find_map(|uri| uri.to_file_path().ok())
 }
 
 #[cfg(test)]
@@ -233,14 +244,14 @@ mod tests {
         stream_pipe(child.stdout.take(), sender.clone(), token);
         watch_exit(child, 7, readers, sender).unwrap();
         let mut events = Vec::new();
-        while let Ok(event) = receiver.recv_blocking() {
+        loop {
+            let event = receiver.recv_blocking().unwrap();
             let exited = matches!(event, LaunchEvent::Exited { .. });
             events.push(event);
             if exited {
-                break;
+                break events;
             }
         }
-        events
     }
 
     #[test]
@@ -309,15 +320,131 @@ mod tests {
             sender,
             reader_tracker().0,
         );
-        let mut lines = Vec::new();
         // The reader thread drops the sender at EOF, which ends the loop.
-        while let Ok(event) = receiver.recv_blocking() {
-            match event {
-                LaunchEvent::Line { text } => lines.push(text),
-                LaunchEvent::Exited { .. } => panic!("no exit from a pipe reader"),
+        assert_eq!(
+            received(&receiver),
+            [
+                r#"Line { text: "ok" }"#,
+                "Line { text: \"\u{FFFD}t\u{FFFD}\" }",
+                r#"Line { text: "last" }"#,
+            ]
+        );
+    }
+
+    /// Every event until the channel closes, in `Debug` form.
+    fn received(receiver: &async_channel::Receiver<LaunchEvent>) -> Vec<String> {
+        std::iter::from_fn(|| receiver.recv_blocking().ok())
+            .map(|event| format!("{event:?}"))
+            .collect()
+    }
+
+    #[test]
+    fn a_missing_pipe_sends_nothing() {
+        let (sender, receiver) = async_channel::bounded(super::LAUNCH_EVENT_CAPACITY);
+        // The launcher's own reader type, so one instantiation sees both cases.
+        stream_pipe(
+            None::<std::process::ChildStdout>,
+            sender,
+            reader_tracker().0,
+        );
+        assert!(received(&receiver).is_empty());
+    }
+
+    #[test]
+    fn a_read_error_is_reported_as_a_line() {
+        /// Yields one line, then fails.
+        struct Failing(bool);
+        impl std::io::Read for Failing {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if std::mem::replace(&mut self.0, true) {
+                    return Err(std::io::Error::other("pipe broke"));
+                }
+                buf[..3].copy_from_slice(b"hi\n");
+                Ok(3)
             }
         }
-        assert_eq!(lines, ["ok", "\u{FFFD}t\u{FFFD}", "last"]);
+        let (sender, receiver) = async_channel::bounded(super::LAUNCH_EVENT_CAPACITY);
+        stream_pipe(Some(Failing(false)), sender, reader_tracker().0);
+        assert_eq!(
+            received(&receiver),
+            [
+                r#"Line { text: "hi" }"#,
+                r#"Line { text: "read error: pipe broke" }"#,
+            ]
+        );
+    }
+
+    #[test]
+    fn no_batch_once_every_sender_is_gone() {
+        let (sender, receiver) = async_channel::bounded::<LaunchEvent>(1);
+        drop(sender);
+        assert!(async_io::block_on(next_batch(&receiver)).is_none());
+    }
+
+    #[test]
+    fn portal_answers_map_to_browse_outcomes() {
+        use super::{BrowseOutcome, browse_outcome};
+        use ashpd::desktop::ResponseError;
+        let path = std::path::PathBuf::from("/games/t.exe");
+        assert_eq!(
+            browse_outcome(Ok(Some(path.clone()))),
+            BrowseOutcome::Picked(path)
+        );
+        assert_eq!(browse_outcome(Ok(None)), BrowseOutcome::Nothing);
+        // A cancelled dialog is not an error.
+        assert_eq!(
+            browse_outcome(Err(ashpd::Error::Response(ResponseError::Cancelled))),
+            BrowseOutcome::Nothing
+        );
+        assert!(matches!(
+            browse_outcome(Err(ashpd::Error::NoResponse)),
+            BrowseOutcome::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn the_first_local_file_uri_is_the_pick() {
+        use super::first_local_path;
+        assert_eq!(
+            first_local_path([
+                "not a uri",
+                "https://example.com/t.exe",
+                "file:///games/My%20Trainer/t.exe",
+            ]),
+            Some(std::path::PathBuf::from("/games/My Trainer/t.exe"))
+        );
+        assert_eq!(first_local_path(["https://example.com/t.exe"]), None);
+    }
+
+    #[test]
+    fn the_file_chooser_reports_failures() {
+        use super::{BrowseOutcome, pick_executable};
+        use crate::test_support::{is_child, run_in_child};
+        // A session bus that does not exist, so no real portal is ever asked.
+        if !is_child() {
+            return run_in_child(
+                "background::tests::the_file_chooser_reports_failures",
+                &[(
+                    "DBUS_SESSION_BUS_ADDRESS",
+                    "unix:path=/nonexistent/bus".as_ref(),
+                )],
+                &[],
+            );
+        }
+        // A folder the portal cannot be given (an interior NUL byte).
+        let bad = {
+            use std::os::unix::ffi::OsStringExt;
+            std::path::PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/a\0b".to_vec()))
+        };
+        assert!(matches!(
+            async_io::block_on(pick_executable(Some(bad))),
+            BrowseOutcome::Failed(_)
+        ));
+        // No portal to talk to.
+        assert!(matches!(
+            async_io::block_on(pick_executable(Some("/tmp".into()))),
+            BrowseOutcome::Failed(_)
+        ));
     }
 
     #[test]

@@ -201,6 +201,12 @@ mod tests {
     }
 
     #[test]
+    fn display_compat_tool_falls_back_to_default_for_a_nameless_proton_dir() {
+        let rootless = game("A", 1, "", "/lib", "/");
+        assert_eq!(display_compat_tool(&rootless), "(default)");
+    }
+
+    #[test]
     fn sorts_by_name_ascending_and_descending() {
         let mut rows = fixtures();
 

@@ -109,4 +109,33 @@ mod tests {
         assert!(proton_dir_for(&dir, 999999).unwrap().is_none());
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn none_when_the_recorded_proton_dir_is_gone() {
+        let dir = crate::test_support::temp_dir("cd_gone");
+        let content = format!(
+            "11.0-100\n{}/removed/files/share/default_pfx/\n",
+            dir.display()
+        );
+        write_config_info(&dir, 274190, &content);
+
+        assert!(proton_dir_for(&dir, 274190).unwrap().is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unreadable_config_info_is_an_error() {
+        let dir = crate::test_support::temp_dir("cd_invalid");
+        let compatdata = paths::app_compatdata_dir(&dir, 274190);
+        std::fs::create_dir_all(&compatdata).unwrap();
+        std::fs::write(compatdata.join("config_info"), [0xff, 0xfe]).unwrap();
+
+        assert!(matches!(
+            proton_dir_for(&dir, 274190),
+            Err(SteamError::Io(_))
+        ));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

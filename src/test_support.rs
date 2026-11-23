@@ -38,3 +38,47 @@ pub fn test_game(name: &str, app_id: u32) -> Game {
         "/lib/steamapps/common/Proton - Experimental",
     )
 }
+
+/// Set in the environment of a test re-run by [`run_in_child`].
+const CHILD_MARKER: &str = "PROTONCTX_TEST_CHILD";
+
+/// Whether this test process is a child started by [`run_in_child`].
+pub fn is_child() -> bool {
+    std::env::var_os(CHILD_MARKER).is_some()
+}
+
+/// Re-run the single test `name` (its full path, e.g.
+/// `"config::tests::round_trip"`) in a child of this test binary, with `set`
+/// added to and `unset` removed from the environment, and panic with its
+/// output unless it ran and passed.
+///
+/// Edition 2024 makes `std::env::set_var` unsafe (and racy across parallel
+/// tests), so code that reads the environment is tested this way: the test
+/// calls this when [`is_child`] is false and runs its body when it is true.
+/// Coverage tools profile the child too.
+pub fn run_in_child(name: &str, set: &[(&str, &std::ffi::OsStr)], unset: &[&str]) {
+    let exe = std::env::current_exe().expect("the test binary path");
+    let mut command = std::process::Command::new(exe);
+    command
+        .args([
+            name,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+            "--include-ignored",
+        ])
+        .env(CHILD_MARKER, "1");
+    for key in unset {
+        command.env_remove(key);
+    }
+    for (key, value) in set {
+        command.env(key, value);
+    }
+    let output = command.output().expect("the test binary re-runs");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "child test {name} failed:\n{stdout}\n{stderr}"
+    );
+}

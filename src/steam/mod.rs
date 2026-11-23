@@ -127,7 +127,11 @@ const MAX_WARNINGS: usize = 20;
 /// are reported in [`Discovery::warnings`] instead of aborting the scan.
 pub fn discover_games() -> Result<Discovery, SteamError> {
     let steam_root = locations::find_steam_root().ok_or(SteamError::SteamNotFound)?;
+    Ok(discover_games_in(steam_root))
+}
 
+/// [`discover_games`] for an already-located Steam root.
+fn discover_games_in(steam_root: std::path::PathBuf) -> Discovery {
     let mut warnings: Vec<String> = Vec::new();
 
     let libraries = libraries_of(&steam_root, &mut warnings);
@@ -232,13 +236,14 @@ pub fn discover_games() -> Result<Discovery, SteamError> {
             .then(a.app_id.cmp(&b.app_id))
     });
 
-    Ok(Discovery { games, warnings })
+    Discovery { games, warnings }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::test_support::{is_child, run_in_child, temp_dir};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn fallback_uses_steam_root_as_library() {
@@ -325,5 +330,251 @@ mod tests {
         let discovery = Discovery::default();
         assert!(discovery.games.is_empty());
         assert!(discovery.warnings.is_empty());
+    }
+
+    #[test]
+    fn errors_describe_themselves() {
+        let io = SteamError::from(std::io::Error::other("disk on fire"));
+        assert!(matches!(io, SteamError::Io(_)));
+        assert_eq!(io.to_string(), "I/O error: disk on fire");
+        assert_eq!(
+            SteamError::Parse("bad vdf".to_string()).to_string(),
+            "parse error: bad vdf"
+        );
+        assert_eq!(
+            SteamError::SteamNotFound.to_string(),
+            "Steam installation not found"
+        );
+    }
+
+    #[test]
+    fn only_io_errors_have_a_source() {
+        use std::error::Error as _;
+        let io = SteamError::Io(std::io::Error::other("disk on fire"));
+        assert_eq!(io.source().unwrap().to_string(), "disk on fire");
+        assert!(SteamError::Parse(String::new()).source().is_none());
+        assert!(SteamError::SteamNotFound.source().is_none());
+    }
+
+    #[test]
+    fn an_empty_library_list_falls_back_without_a_warning() {
+        let root = temp_dir("libraries_empty");
+        std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        // Valid, but its only folder does not exist.
+        std::fs::write(
+            root.join("steamapps").join("libraryfolders.vdf"),
+            "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\"/nonexistent/protonctx\"\n\t}\n}\n",
+        )
+        .unwrap();
+
+        let mut warnings = Vec::new();
+        assert_eq!(libraries_of(&root, &mut warnings), vec![root.clone()]);
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Write `<library>/steamapps/appmanifest_<app_id>.acf`, with an
+    /// `installdir` only when `install_dir` is given.
+    fn write_manifest(library: &Path, app_id: u32, name: &str, install_dir: Option<&str>) {
+        let steamapps = library.join("steamapps");
+        std::fs::create_dir_all(&steamapps).unwrap();
+        let install_dir = install_dir
+            .map(|dir| format!("\t\"installdir\"\t\"{dir}\"\n"))
+            .unwrap_or_default();
+        std::fs::write(
+            steamapps.join(format!("appmanifest_{app_id}.acf")),
+            format!("\"AppState\"\n{{\n\t\"appid\"\t\"{app_id}\"\n\t\"name\"\t\"{name}\"\n{install_dir}}}\n"),
+        )
+        .unwrap();
+    }
+
+    /// Write a game's manifest and create its `steamapps/common/<install_dir>`.
+    fn install_game(library: &Path, app_id: u32, name: &str) -> PathBuf {
+        let install_dir = format!("game{app_id}");
+        write_manifest(library, app_id, name, Some(&install_dir));
+        let common = paths::app_common_dir(library, &install_dir);
+        std::fs::create_dir_all(&common).unwrap();
+        common
+    }
+
+    /// Write `compatdata/<app_id>/config_info` holding raw `content`.
+    fn write_config_info(library: &Path, app_id: u32, content: &[u8]) {
+        let prefix = paths::app_compatdata_dir(library, app_id);
+        std::fs::create_dir_all(&prefix).unwrap();
+        std::fs::write(prefix.join("config_info"), content).unwrap();
+    }
+
+    #[test]
+    fn discovery_lists_games_and_skips_non_games() {
+        let base = temp_dir("discover_full");
+        let root = base.join("Steam");
+        let second = base.join("library");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        // The root is not listed, so it is added for tool lookup only.
+        std::fs::write(
+            root.join("config").join("libraryfolders.vdf"),
+            format!(
+                "\"libraryfolders\"\n{{\n\t\"0\"\n\t{{\n\t\t\"path\"\t\"{}\"\n\t}}\n}}\n",
+                second.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("config").join("config.vdf"),
+            "\"InstallConfigStore\"\n{\n\"Software\"\n{\n\"Valve\"\n{\n\"Steam\"\n{\n\
+             \"CompatToolMapping\"\n{\n\"10\"\n{\n\"name\"\t\"GE-Proton10-34\"\n}\n\
+             \"30\"\n{\n\"name\"\t\"boxtron\"\n}\n}\n}\n}\n}\n}\n",
+        )
+        .unwrap();
+        let ge = root.join("compatibilitytools.d").join("GE-Proton10-34");
+        std::fs::create_dir_all(&ge).unwrap();
+
+        // Games: a mapped custom tool, a native game, a prefix-only fallback,
+        // and two names differing only in case (ordered by app id).
+        install_game(&second, 10, "beta");
+        install_game(&second, 20, "Alpha");
+        install_game(&second, 30, "gamma");
+        install_game(&second, 41, "Delta");
+        install_game(&second, 40, "delta");
+        let recorded = second.join("steamapps").join("common").join("Proton 9.0");
+        std::fs::create_dir_all(&recorded).unwrap();
+        write_config_info(
+            &second,
+            30,
+            format!("{}/files/share/default_pfx/\n", recorded.display()).as_bytes(),
+        );
+
+        // Non-games: no installdir, an uninstalled dir, Proton, a custom tool,
+        // and the Steamworks redistributables.
+        write_manifest(&second, 50, "No Dir", None);
+        write_manifest(&second, 51, "Not Installed", Some("missing"));
+        let proton = install_game(&second, 52, "Proton Experimental");
+        std::fs::write(proton.join("toolmanifest.vdf"), "x").unwrap();
+        let custom = install_game(&second, 53, "Custom Tool");
+        std::fs::write(custom.join("compatibilitytool.vdf"), "x").unwrap();
+        install_game(&second, STEAMWORKS_COMMON_REDISTRIBUTABLES_APPID, "Redist");
+
+        let discovery = discover_games_in(root.clone());
+        assert!(discovery.warnings.is_empty(), "{:?}", discovery.warnings);
+        let summary: Vec<_> = discovery
+            .games
+            .iter()
+            .map(|g| (g.name.as_str(), g.app_id, g.compat_tool.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("Alpha", 20, ""),
+                ("beta", 10, "GE-Proton10-34"),
+                ("delta", 40, ""),
+                ("Delta", 41, ""),
+                ("gamma", 30, "boxtron"),
+            ]
+        );
+        let game = |id| discovery.games.iter().find(|g| g.app_id == id).unwrap();
+        assert_eq!(game(10).proton_dir, ge.to_string_lossy());
+        assert_eq!(game(20).proton_dir, "");
+        assert_eq!(game(30).proton_dir, recorded.to_string_lossy());
+        assert_eq!(game(10).library_path, second.to_string_lossy());
+        assert_eq!(game(10).steam_root, root.to_string_lossy());
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn discovery_reports_a_corrupt_config_vdf_and_caps_prefix_warnings() {
+        let root = temp_dir("discover_warnings");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(root.join("config").join("config.vdf"), "\"broken\"\n{\n").unwrap();
+        // No library list: the root is the default library.
+        std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
+
+        // More unreadable (non-UTF-8) prefixes than the warning cap.
+        let unresolvable = MAX_WARNINGS as u32 + 5;
+        for app_id in 1..=unresolvable {
+            install_game(&root, app_id, &format!("Game {app_id:02}"));
+            write_config_info(&root, app_id, &[0xff, 0xfe]);
+        }
+
+        let discovery = discover_games_in(root.clone());
+        assert_eq!(discovery.games.len(), unresolvable as usize);
+        assert!(discovery.games.iter().all(|g| g.proton_dir.is_empty()));
+        // The library list and config.vdf warnings, then prefixes up to the cap.
+        assert_eq!(
+            discovery.warnings.len(),
+            MAX_WARNINGS,
+            "{:?}",
+            discovery.warnings
+        );
+        assert!(discovery.warnings[0].contains("library list"));
+        assert!(discovery.warnings[1].contains("config.vdf"));
+        assert!(discovery.warnings[2].contains("proton dir for app 1:"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn discovery_reports_an_unreadable_manifest_directory() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = temp_dir("discover_unreadable");
+        let steamapps = root.join("steamapps");
+        std::fs::create_dir_all(&steamapps).unwrap();
+        std::fs::write(steamapps.join("libraryfolders.vdf"), "x").unwrap();
+        std::fs::set_permissions(&steamapps, std::fs::Permissions::from_mode(0o300)).unwrap();
+
+        // Root ignores permissions, so there is nothing to observe then.
+        let readable = std::fs::read_dir(&steamapps).is_ok();
+        let discovery = discover_games_in(root.clone());
+        std::fs::set_permissions(&steamapps, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !readable {
+            assert!(discovery.games.is_empty());
+            assert!(
+                discovery
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("Failed to read manifests")),
+                "{:?}",
+                discovery.warnings
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn discover_games_reports_a_missing_steam() {
+        if !is_child() {
+            return run_in_child(
+                "steam::tests::discover_games_reports_a_missing_steam",
+                &[],
+                &["HOME"],
+            );
+        }
+        assert!(matches!(discover_games(), Err(SteamError::SteamNotFound)));
+    }
+
+    #[test]
+    fn discover_games_scans_the_steam_root_under_home() {
+        // Fixed (pid-free) so the child resolves the same directory.
+        let home = std::env::temp_dir().join("protonctx_test_discover_home");
+        if !is_child() {
+            let root = home.join(".local/share/Steam");
+            std::fs::create_dir_all(root.join("steamapps")).unwrap();
+            std::fs::write(root.join("steamapps").join("libraryfolders.vdf"), "x").unwrap();
+            install_game(&root, 7, "Seven");
+            run_in_child(
+                "steam::tests::discover_games_scans_the_steam_root_under_home",
+                &[("HOME", home.as_os_str())],
+                &[],
+            );
+            std::fs::remove_dir_all(&home).ok();
+            return;
+        }
+        let discovery = discover_games().unwrap();
+        assert_eq!(discovery.games.len(), 1);
+        assert_eq!(discovery.games[0].name, "Seven");
     }
 }

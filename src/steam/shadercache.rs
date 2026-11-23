@@ -358,4 +358,52 @@ mod tests {
         // `<root>/274190` is missing the `steamapps/shadercache` parents.
         assert!(!is_shader_cache_dir(&root.join("274190"), 274190));
     }
+
+    #[test]
+    fn delete_refuses_a_relative_library() {
+        let error = delete_shader_cache(Path::new("relative/library"), 274190).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn delete_reports_a_cache_path_it_cannot_inspect() {
+        // `shadercache` is a file, so looking up the cache under it fails
+        // with an error other than "not found".
+        let root = crate::test_support::temp_dir("shadercache_notdir");
+        std::fs::create_dir_all(root.join("steamapps")).unwrap();
+        std::fs::write(root.join("steamapps").join("shadercache"), "x").unwrap();
+
+        let error = delete_shader_cache(&root, 274190).unwrap_err();
+        assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+        assert!(root.join("steamapps").join("shadercache").is_file());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_in_flatpak_runs_on_the_host() {
+        // Fixed (pid-free) so the child resolves the same directory.
+        let root = std::env::temp_dir().join("protonctx_test_shadercache_flatpak");
+        let empty_path = root.join("bin");
+        if !crate::test_support::is_child() {
+            std::fs::create_dir_all(shader_cache_dir_for(&root, 274190)).unwrap();
+            std::fs::create_dir_all(&empty_path).unwrap();
+            // FLATPAK_ID marks the sandbox; an empty PATH keeps the real
+            // `flatpak-spawn` from running.
+            crate::test_support::run_in_child(
+                "steam::shadercache::tests::delete_in_flatpak_runs_on_the_host",
+                &[
+                    ("FLATPAK_ID", std::ffi::OsStr::new("test.protonctx")),
+                    ("PATH", empty_path.as_os_str()),
+                ],
+                &[],
+            );
+            std::fs::remove_dir_all(&root).ok();
+            return;
+        }
+        let error = delete_shader_cache(&root, 274190).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+        // The sandbox's own view is never touched directly.
+        assert!(shader_cache_dir_for(&root, 274190).is_dir());
+    }
 }

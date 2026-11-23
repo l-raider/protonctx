@@ -38,7 +38,13 @@ use slint::ComponentHandle as _;
 /// `--preset light|dark` forces the bundled Breeze preset instead of the live
 /// KDE scheme (a development switch for spot checks).
 fn preset_arg() -> Option<bool> {
-    let mut args = std::env::args().skip(1);
+    preset_from(std::env::args().skip(1))
+}
+
+/// The `--preset` mode named in `args` (the command line without the program
+/// name): `Some(true)` for dark, `Some(false)` for light. The first known mode
+/// wins; unknown modes are reported and skipped.
+fn preset_from(mut args: impl Iterator<Item = String>) -> Option<bool> {
     while let Some(arg) = args.next() {
         let value = match arg.strip_prefix("--preset=") {
             Some(value) => Some(value.to_string()),
@@ -65,4 +71,40 @@ fn main() -> Result<(), slint::PlatformError> {
     let _app = app::start(&main, tokens);
     main.show()?;
     slint::run_event_loop_until_quit()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{preset_arg, preset_from};
+
+    fn preset_of(args: &[&str]) -> Option<bool> {
+        preset_from(args.iter().map(|arg| arg.to_string()))
+    }
+
+    #[test]
+    fn preset_from_reads_both_argument_forms() {
+        assert_eq!(preset_of(&["--preset", "dark"]), Some(true));
+        assert_eq!(preset_of(&["--preset", "light"]), Some(false));
+        assert_eq!(preset_of(&["--preset=dark"]), Some(true));
+        assert_eq!(preset_of(&["--preset=light"]), Some(false));
+    }
+
+    #[test]
+    fn preset_from_skips_unknown_modes_and_other_arguments() {
+        assert_eq!(preset_of(&[]), None);
+        assert_eq!(preset_of(&["--verbose", "dark"]), None);
+        assert_eq!(preset_of(&["--preset=sepia"]), None);
+        assert_eq!(
+            preset_of(&["--preset=sepia", "--preset", "dark"]),
+            Some(true)
+        );
+        // A trailing `--preset` with no value names no mode.
+        assert_eq!(preset_of(&["--preset"]), None);
+    }
+
+    #[test]
+    fn preset_arg_finds_no_preset_in_the_test_harness_arguments() {
+        // The test binary is never started with `--preset`.
+        assert_eq!(preset_arg(), None);
+    }
 }

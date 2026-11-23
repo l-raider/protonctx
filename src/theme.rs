@@ -117,7 +117,8 @@ pub struct AppTokens {
     /// View background (`QPalette::Base`): the log pane and list fill.
     /// gpui-component's `muted`, which Breeze paints with the view colour.
     pub muted: Color,
-    /// KDE Header colour set: the toolbar and the table header.
+    /// The table header (and toolbar) fill: KDE's Button colour set, which
+    /// Breeze paints table headers with.
     pub header: Color,
     /// Header text.
     pub header_foreground: Color,
@@ -356,7 +357,7 @@ fn family(spec: &ResolvedFontSpec) -> String {
 mod tests {
     use super::{
         ACCENT_ALPHA, Color, MENU_HOVER_ALPHA, THUMB_HOVER_ALPHA, THUMB_IDLE_ALPHA, build,
-        qt_lighter,
+        qt_lighter, scaled,
     };
     use crate::system_theme::preset;
 
@@ -383,10 +384,9 @@ mod tests {
         assert!(loaded.is_dark);
         assert_close(t.background, hex(0x202326), "window background");
         assert_close(t.muted, hex(0x141618), "view / muted");
-        // The preset's header is the view colour; the live KDE Header colour
-        // (#292C30) is asserted through the KDE reader in `system_theme`.
-        assert_close(t.header, hex(0x141618), "header");
-        assert_close(t.alternate_row, hex(0x2A2E32), "alternate row");
+        // Breeze paints table headers with the Button colour set.
+        assert_close(t.header, hex(0x292C30), "header");
+        assert_close(t.alternate_row, hex(0x1D1F22), "alternate row");
         assert_close(t.foreground, hex(0xFCFCFC), "text");
         assert_close(t.selection, hex(0x3DAEE9), "selection");
         assert_close(
@@ -477,5 +477,47 @@ mod tests {
         // A saturated colour at full value loses saturation instead.
         let washed = qt_lighter(Color::from_rgb(1.0, 0.0, 0.0), 110.0);
         assert_close(washed, Color::from_rgb(1.0, 0.1, 0.1), "washed");
+    }
+
+    #[test]
+    fn qt_lighter_round_trips_every_hue_sector_at_factor_100() {
+        // One colour per sector of the HSV hexagon; factor 100 is the identity.
+        for (r, g, b) in [
+            (1.0, 0.5, 0.0), // red to yellow
+            (0.5, 1.0, 0.0), // yellow to green
+            (0.0, 1.0, 0.5), // green to cyan
+            (0.0, 0.5, 1.0), // cyan to blue
+            (0.5, 0.0, 1.0), // blue to magenta
+            (1.0, 0.0, 0.5), // magenta to red
+        ] {
+            let color = Color::from_rgb(r, g, b);
+            assert_close(qt_lighter(color, 100.0), color, "round trip");
+        }
+    }
+
+    #[test]
+    fn qt_lighter_keeps_black_and_washes_out_green_overflow() {
+        assert_close(
+            qt_lighter(Color::from_rgb(0.0, 0.0, 0.0), 150.0),
+            Color::from_rgb(0.0, 0.0, 0.0),
+            "black",
+        );
+        // Green at full value: the 0.5 overflow comes out of the saturation.
+        assert_close(
+            qt_lighter(Color::from_rgb(0.0, 1.0, 0.0), 150.0),
+            Color::from_rgb(0.5, 1.0, 0.5),
+            "green",
+        );
+    }
+
+    #[test]
+    fn scaled_applies_only_a_finite_positive_text_scaling_factor() {
+        let mut prefs = native_theme::AccessibilityPreferences::default();
+        prefs.text_scaling_factor = 1.5;
+        assert_eq!(scaled(10.0, &prefs), 15.0);
+        for factor in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            prefs.text_scaling_factor = factor;
+            assert_eq!(scaled(10.0, &prefs), 10.0, "factor {factor}");
+        }
     }
 }

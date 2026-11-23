@@ -46,3 +46,29 @@ impl Game {
         p.is_file().then_some(p)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{game, temp_dir};
+
+    #[test]
+    fn proton_script_is_none_without_a_proton_dir() {
+        let game = game("No Prefix", 1, "", "/lib", "");
+        assert_eq!(game.proton_script(), None);
+    }
+
+    #[test]
+    fn proton_script_is_the_proton_file_when_it_exists() {
+        let dir = temp_dir("models_proton_script");
+        std::fs::create_dir_all(&dir).unwrap();
+        let game = game("Has Proton", 2, "proton_9", "/lib", dir.to_str().unwrap());
+
+        // The directory is resolved but holds no `proton` script yet.
+        assert_eq!(game.proton_script(), None);
+
+        std::fs::write(dir.join("proton"), "").unwrap();
+        assert_eq!(game.proton_script(), Some(dir.join("proton")));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

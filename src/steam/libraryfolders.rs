@@ -112,4 +112,37 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn falls_back_to_the_legacy_steamapps_location() {
+        let dir = crate::test_support::temp_dir("lf_legacy");
+        let lib = dir.join("games");
+        std::fs::create_dir_all(dir.join("steamapps")).unwrap();
+        std::fs::create_dir_all(&lib).unwrap();
+        // Entries that are not libraries: a non-object value, an object
+        // without a path, and a path that does not exist; plus a duplicate.
+        let vdf = format!(
+            "\"libraryfolders\"\n{{\n\t\"contentstatsid\"\t\"123\"\n\t\"0\"\n\t{{\n\t\t\"label\"\t\"\"\n\t}}\n\
+             \t\"1\"\n\t{{\n\t\t\"path\"\t\"{0}/missing\"\n\t}}\n\
+             \t\"2\"\n\t{{\n\t\t\"path\"\t\"{1}\"\n\t}}\n\t\"3\"\n\t{{\n\t\t\"path\"\t\"{1}\"\n\t}}\n}}\n",
+            dir.display(),
+            lib.display()
+        );
+        std::fs::write(dir.join("steamapps").join("libraryfolders.vdf"), vdf).unwrap();
+
+        assert_eq!(library_folders(&dir).unwrap(), vec![lib]);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_file_is_an_error() {
+        let dir = crate::test_support::temp_dir("lf_missing");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let error = library_folders(&dir).unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

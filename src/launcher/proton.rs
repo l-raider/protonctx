@@ -261,4 +261,73 @@ mod tests {
                 .any(|arg| arg.starts_with("--directory"))
         );
     }
+
+    #[test]
+    fn a_proton_script_that_cannot_run_is_a_spawn_error() {
+        use crate::test_support::{is_child, run_in_child, temp_dir};
+        if !is_child() {
+            return run_in_child(
+                "launcher::proton::tests::a_proton_script_that_cannot_run_is_a_spawn_error",
+                &[],
+                &["FLATPAK_ID"],
+            );
+        }
+        let root = temp_dir("proton_spawn_error");
+        let game = crate::launcher::tests::game_with_fake_proton(&root);
+        let proton = root.join("Proton/proton");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&proton, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let error = run_in_prefix(&game, &["winecfg"], None).err().unwrap();
+        let expected = format!("failed to start process `{}`: ", proton.display());
+        assert!(error.to_string().starts_with(&expected), "{error}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn inside_a_sandbox_proton_runs_through_flatpak_spawn() {
+        use crate::launcher::tests::{game_with_fake_proton, output_of, write_script};
+        use crate::test_support::{is_child, run_in_child, temp_dir};
+        if !is_child() {
+            let bin = temp_dir("proton_flatpak_bin");
+            // Stands in for the host: prints the arguments it was given.
+            write_script(&bin.join("flatpak-spawn"), "echo \"$@\"");
+            run_in_child(
+                "launcher::proton::tests::inside_a_sandbox_proton_runs_through_flatpak_spawn",
+                &[
+                    ("FLATPAK_ID", "io.example.Test".as_ref()),
+                    ("PATH", bin.as_os_str()),
+                ],
+                &[],
+            );
+            std::fs::remove_dir_all(&bin).ok();
+            return;
+        }
+        let root = temp_dir("proton_flatpak_launch");
+        let game = game_with_fake_proton(&root);
+        let proton = root.join("Proton/proton");
+
+        let launched = run_in_prefix(&game, &["t.exe"], Some(Path::new("/games/Trainer"))).unwrap();
+        assert!(
+            launched
+                .command_line
+                .starts_with(&format!("flatpak-spawn --host {}", proton.display())),
+            "{}",
+            launched.command_line
+        );
+        let output = output_of(launched);
+        assert!(output.starts_with("--host --env="), "{output}");
+        assert!(
+            output.ends_with(&format!(
+                "--directory=/games/Trainer {} runinprefix t.exe\n",
+                proton.display()
+            )),
+            "{output}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

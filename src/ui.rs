@@ -147,3 +147,70 @@ where
     g.set_mono_size(t.mono_size);
     g.set_reduce_motion(t.reduce_motion);
 }
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsStr;
+
+    use super::{has_x11_display, new_dialog, select_backend};
+    use crate::test_support::{is_child, run_in_child};
+
+    #[test]
+    fn an_x11_display_is_a_non_empty_display_variable() {
+        if !is_child() {
+            run_in_child(
+                "ui::tests::an_x11_display_is_a_non_empty_display_variable",
+                &[
+                    ("DISPLAY", OsStr::new(":0")),
+                    ("PROTONCTX_EXPECT", OsStr::new("1")),
+                ],
+                &[],
+            );
+            run_in_child(
+                "ui::tests::an_x11_display_is_a_non_empty_display_variable",
+                &[("DISPLAY", OsStr::new(""))],
+                &["PROTONCTX_EXPECT"],
+            );
+            return run_in_child(
+                "ui::tests::an_x11_display_is_a_non_empty_display_variable",
+                &[],
+                &["DISPLAY", "PROTONCTX_EXPECT"],
+            );
+        }
+        assert_eq!(
+            has_x11_display(),
+            std::env::var_os("PROTONCTX_EXPECT").is_some()
+        );
+    }
+
+    /// Without a reachable display the backend cannot start; selecting it
+    /// reports that instead of panicking, on X11 and on Wayland alike.
+    #[test]
+    fn the_backend_fails_cleanly_without_a_display() {
+        if !is_child() {
+            let unset = ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "FLATPAK_ID"];
+            run_in_child(
+                "ui::tests::the_backend_fails_cleanly_without_a_display",
+                &[("DISPLAY", OsStr::new(":31999"))],
+                &unset,
+            );
+            return run_in_child(
+                "ui::tests::the_backend_fails_cleanly_without_a_display",
+                &[("XDG_RUNTIME_DIR", OsStr::new("/nonexistent"))],
+                &[&unset[..], &["DISPLAY"]].concat(),
+            );
+        }
+        let selected = select_backend();
+        // Creating a window is where the event loop meets the display.
+        let window = selected.and_then(|()| super::MainWindow::new().map(drop));
+        assert!(window.is_err());
+    }
+
+    #[test]
+    fn new_dialog_passes_through_the_component_and_its_error() {
+        let created = new_dialog(|| Ok::<_, slint::PlatformError>(7));
+        assert_eq!(created.unwrap(), 7);
+        let failed = new_dialog(|| Err::<(), _>(slint::PlatformError::NoPlatform));
+        assert!(failed.is_err());
+    }
+}

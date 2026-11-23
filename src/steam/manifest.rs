@@ -131,4 +131,33 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn a_library_without_steamapps_has_no_apps() {
+        let dir = crate::test_support::temp_dir("manifest_no_steamapps");
+        assert!(installed_apps(&dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn skips_corrupt_and_appid_less_manifests() {
+        let dir = crate::test_support::temp_dir("manifest_corrupt");
+        let steamapps = dir.join("steamapps");
+        std::fs::create_dir_all(&steamapps).unwrap();
+        std::fs::write(steamapps.join("appmanifest_1.acf"), "\"AppState\"\n{\n").unwrap();
+        std::fs::write(
+            steamapps.join("appmanifest_2.acf"),
+            "\"AppState\"\n{\n\t\"appid\"\t\"two\"\n\t\"installdir\"\t\"\"\n}\n",
+        )
+        .unwrap();
+        // A plain-string root does not parse as an app state.
+        std::fs::write(steamapps.join("appmanifest_3.acf"), "\"AppState\"\t\"x\"\n").unwrap();
+
+        assert!(installed_apps(&dir).unwrap().is_empty());
+        let state = read_app_state(&steamapps.join("appmanifest_2.acf")).unwrap();
+        assert_eq!(state.app_id, None);
+        assert_eq!(state.name, "");
+        assert_eq!(state.install_dir, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

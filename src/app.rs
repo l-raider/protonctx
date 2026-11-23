@@ -767,3 +767,864 @@ fn parent_when_mapped<T: ComponentHandle + 'static>(
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    //! The app driven end to end on a headless Slint platform with a real
+    //! event loop, against a fake Steam tree under a temporary `$HOME`.
+    //!
+    //! The app reads and writes the user's config and Steam directories, so
+    //! every scenario runs in a child process (see
+    //! [`crate::test_support::run_in_child`]) whose `HOME` and XDG
+    //! directories point into a temp dir, and which has no display and no
+    //! D-Bus session (the portal file chooser then fails fast).
+
+    use std::cell::RefCell;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
+    use std::sync::{Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
+    use slint::platform::{EventLoopProxy, Platform, WindowAdapter, WindowEvent};
+    use slint::{ComponentHandle, EventLoopError, Model};
+
+    use super::{App, BrowseOutcome, Failure, Shared, Which, start, with_app};
+    use crate::test_support::{is_child, run_in_child, test_game};
+    use crate::ui::MainWindow;
+
+    // ---- A headless platform with an event loop ----
+
+    enum Message {
+        Run(Box<dyn FnOnce() + Send>),
+        Quit,
+    }
+
+    struct Proxy(mpsc::Sender<Message>);
+
+    impl EventLoopProxy for Proxy {
+        fn quit_event_loop(&self) -> Result<(), EventLoopError> {
+            self.0
+                .send(Message::Quit)
+                .map_err(|_| EventLoopError::EventLoopTerminated)
+        }
+
+        fn invoke_from_event_loop(
+            &self,
+            event: Box<dyn FnOnce() + Send>,
+        ) -> Result<(), EventLoopError> {
+            self.0
+                .send(Message::Run(event))
+                .map_err(|_| EventLoopError::EventLoopTerminated)
+        }
+    }
+
+    /// Software-rendered windows plus an event loop that runs queued
+    /// callbacks and Slint timers until it is asked to quit.
+    struct Headless {
+        sender: mpsc::Sender<Message>,
+        receiver: Mutex<mpsc::Receiver<Message>>,
+    }
+
+    impl Platform for Headless {
+        fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
+            Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
+        }
+
+        fn run_event_loop(&self) -> Result<(), slint::PlatformError> {
+            let receiver = self.receiver.lock().unwrap();
+            loop {
+                slint::platform::update_timers_and_animations();
+                let wait = slint::platform::duration_until_next_timer_update()
+                    .unwrap_or(Duration::from_millis(20))
+                    .min(Duration::from_millis(20));
+                match receiver.recv_timeout(wait) {
+                    Ok(Message::Run(event)) => event(),
+                    Ok(Message::Quit) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Ok(());
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+        }
+
+        fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+            Some(Box::new(Proxy(self.sender.clone())))
+        }
+    }
+
+    fn install_platform() {
+        let (sender, receiver) = mpsc::channel();
+        slint::platform::set_platform(Box::new(Headless {
+            sender,
+            receiver: Mutex::new(receiver),
+        }))
+        .expect("one platform per child process");
+    }
+
+    /// Run the event loop until `done` holds, failing after a generous
+    /// deadline.
+    fn run_until(what: &str, done: impl Fn() -> bool + 'static) {
+        let done = Rc::new(done);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let timer = slint::Timer::default();
+        let check = done.clone();
+        // Quit once: the timer can fire again before the loop reads the
+        // quit, and a second one would end the next run early.
+        let quitting = std::cell::Cell::new(false);
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(2),
+            move || {
+                if !quitting.get() && (check() || Instant::now() > deadline) {
+                    quitting.set(true);
+                    let _ = slint::quit_event_loop();
+                }
+            },
+        );
+        slint::run_event_loop().unwrap();
+        assert!(done(), "timed out waiting for {what}");
+    }
+
+    /// Run the event loop for `duration`, letting timers and tasks run.
+    fn run_for(duration: Duration) {
+        let end = Instant::now() + duration;
+        run_until("time to pass", move || Instant::now() >= end);
+    }
+
+    // ---- The fake Steam tree ----
+
+    /// App id of the game with a prefix, a Proton script, and a shader cache.
+    const ALPHA: u32 = 100;
+    /// App id of the game that has never run under Proton.
+    const BETA: u32 = 200;
+
+    fn steam_root(home: &Path) -> PathBuf {
+        home.join(".local/share/Steam")
+    }
+
+    fn manifest(steamapps: &Path, app_id: u32, name: &str, dir: &str) {
+        std::fs::write(
+            steamapps.join(format!("appmanifest_{app_id}.acf")),
+            format!(
+                "\"AppState\"\n{{\n\t\"appid\"\t\t\"{app_id}\"\n\t\"name\"\t\t\"{name}\"\n\t\"installdir\"\t\t\"{dir}\"\n}}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(steamapps.join("common").join(dir)).unwrap();
+    }
+
+    /// Build `home` with a Steam root holding two games. Alpha's prefix
+    /// records a "Proton" whose script prints its arguments and exits.
+    fn fake_home(home: &Path) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let _ = std::fs::remove_dir_all(home);
+        let root = steam_root(home);
+        let steamapps = root.join("steamapps");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::create_dir_all(&steamapps).unwrap();
+        std::fs::write(
+            root.join("config/libraryfolders.vdf"),
+            format!(
+                "\"libraryfolders\"\n{{\n\t\"0\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t}}\n}}\n",
+                root.display()
+            ),
+        )
+        .unwrap();
+        manifest(&steamapps, ALPHA, "Alpha Game", "Alpha");
+        manifest(&steamapps, BETA, "Beta Game", "Beta");
+
+        let proton = steamapps.join("common/FakeProton");
+        std::fs::create_dir_all(&proton).unwrap();
+        let script = proton.join("proton");
+        std::fs::write(&script, "#!/bin/sh\necho \"proton $*\"\necho oops >&2\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let prefix = steamapps.join("compatdata").join(ALPHA.to_string());
+        std::fs::create_dir_all(&prefix).unwrap();
+        std::fs::write(
+            prefix.join("config_info"),
+            format!("11.0-100\n{}/files/share/default_pfx/\n", proton.display()),
+        )
+        .unwrap();
+
+        std::fs::create_dir_all(steamapps.join("shadercache").join(ALPHA.to_string())).unwrap();
+        std::fs::create_dir_all(home.join("config")).unwrap();
+        std::fs::create_dir_all(home.join("state")).unwrap();
+    }
+
+    /// Run the test `name` in a child whose home is a fresh fake Steam tree.
+    /// `display` is the child's `DISPLAY`, or none.
+    fn in_fake_home(name: &str, tag: &str, display: Option<&str>) {
+        let home = crate::test_support::temp_dir(tag);
+        fake_home(&home);
+        let config = home.join("config");
+        let state = home.join("state");
+        let mut set = vec![
+            ("HOME", home.as_os_str()),
+            ("XDG_CONFIG_HOME", config.as_os_str()),
+            ("XDG_STATE_HOME", state.as_os_str()),
+        ];
+        let mut unset = vec!["WAYLAND_DISPLAY", "FLATPAK_ID"];
+        // Unset, zbus would fall back to the real session bus.
+        set.push(("DBUS_SESSION_BUS_ADDRESS", OsStr::new(NO_BUS)));
+        match display {
+            Some(display) => set.push(("DISPLAY", OsStr::new(display))),
+            None => unset.push("DISPLAY"),
+        }
+        run_in_child(&format!("app::tests::{name}"), &set, &unset);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A session bus address with nothing listening.
+    const NO_BUS: &str = "unix:path=/nonexistent/protonctx-test-bus";
+
+    fn home() -> PathBuf {
+        crate::xdg::home_dir().unwrap()
+    }
+
+    // ---- Driving the app ----
+
+    struct Harness {
+        ui: MainWindow,
+        app: Shared,
+    }
+
+    impl Harness {
+        /// Start the app and wait for the first discovery.
+        fn start() -> Self {
+            install_platform();
+            let tokens =
+                crate::theme::build(&crate::system_theme::preset(&Default::default(), false));
+            let ui = MainWindow::new().unwrap();
+            crate::ui::apply_theme(&ui, &tokens);
+            let app = start(&ui, tokens);
+            // Shown as in `main`: Slint quits the loop when the last visible
+            // window hides, which would otherwise be any dialog.
+            ui.show().unwrap();
+            let harness = Harness { ui, app };
+            harness.wait_loaded();
+            harness
+        }
+
+        fn wait_loaded(&self) {
+            let app = self.app.clone();
+            run_until("discovery", move || !app.borrow().state.loading);
+        }
+
+        fn wait_launches(&self) {
+            let app = self.app.clone();
+            run_until("the launch to exit", move || {
+                !app.borrow().state.launch_running
+            });
+        }
+
+        /// Select the row showing `app_id`.
+        fn select(&self, app_id: u32) {
+            let rows = self.ui.get_rows();
+            let row = (0..rows.row_count())
+                .find(|&i| rows.row_data(i).unwrap().app_id == app_id.to_string())
+                .unwrap();
+            self.ui.invoke_row_pressed(i32::try_from(row).unwrap());
+        }
+
+        fn log(&self) -> String {
+            self.app.borrow().state.log.text().to_string()
+        }
+
+        fn visible(&self, which: Which) -> bool {
+            self.app
+                .borrow()
+                .window_of(which)
+                .is_some_and(slint::Window::is_visible)
+        }
+
+        fn error_heading(&self) -> String {
+            let app = self.app.borrow();
+            app.error.as_ref().unwrap().get_heading().to_string()
+        }
+
+        fn error_message(&self) -> String {
+            let app = self.app.borrow();
+            app.error.as_ref().unwrap().get_message().to_string()
+        }
+
+        /// Close the error dialog with its OK button.
+        fn close_error(&self) {
+            let dialog = self.app.borrow().error.as_ref().unwrap().clone_strong();
+            dialog.invoke_ok();
+            assert!(!self.visible(Which::Error));
+        }
+    }
+
+    // ---- Scenarios ----
+
+    #[test]
+    fn discovery_fills_the_table_and_header_clicks_sort_it() {
+        if !is_child() {
+            return in_fake_home(
+                "discovery_fills_the_table_and_header_clicks_sort_it",
+                "app_discovery",
+                None,
+            );
+        }
+        let h = Harness::start();
+        assert_eq!(
+            h.ui.get_app_title(),
+            format!("protonctx v{}", env!("CARGO_PKG_VERSION"))
+        );
+        let names = |h: &Harness| -> Vec<String> {
+            h.ui.get_rows()
+                .iter()
+                .map(|row| row.name.to_string())
+                .collect()
+        };
+        assert_eq!(names(&h), ["Alpha Game", "Beta Game"]);
+        assert!(!h.ui.get_loading());
+        assert_eq!(h.ui.get_selected(), -1);
+
+        // Sorting keeps the selection on its game.
+        h.select(BETA);
+        assert_eq!(h.ui.get_selected(), 1);
+        h.ui.invoke_header_clicked(0);
+        assert!(h.ui.get_sort_descending());
+        assert_eq!(names(&h), ["Beta Game", "Alpha Game"]);
+        assert_eq!(h.ui.get_selected(), 0);
+        // A negative column is treated as the first.
+        h.ui.invoke_header_clicked(-1);
+        assert!(!h.ui.get_sort_descending());
+        h.ui.invoke_header_clicked(1);
+        assert_eq!(h.ui.get_sort_column(), 1);
+
+        // A press outside the rows clears the selection.
+        h.ui.invoke_row_pressed(-1);
+        assert_eq!(h.ui.get_selected(), -1);
+
+        // A refresh while one runs is ignored; the rows come back.
+        h.ui.invoke_refresh();
+        assert!(h.ui.get_loading());
+        h.ui.invoke_refresh();
+        assert_eq!(h.log().matches("Refreshing games...").count(), 2);
+        h.wait_loaded();
+        assert_eq!(h.ui.get_rows().row_count(), 2);
+        assert_eq!(h.ui.get_selected(), -1);
+
+        h.ui.invoke_clear_logs();
+        assert_eq!(h.ui.get_log_text(), "");
+        assert_eq!(h.ui.get_log_lines(), 0);
+    }
+
+    #[test]
+    fn a_missing_steam_install_is_reported() {
+        if !is_child() {
+            let home = crate::test_support::temp_dir("app_no_steam");
+            std::fs::create_dir_all(&home).unwrap();
+            run_in_child(
+                "app::tests::a_missing_steam_install_is_reported",
+                &[("HOME", home.as_os_str())],
+                &[
+                    "DISPLAY",
+                    "WAYLAND_DISPLAY",
+                    "XDG_CONFIG_HOME",
+                    "XDG_STATE_HOME",
+                ],
+            );
+            let _ = std::fs::remove_dir_all(&home);
+            return;
+        }
+        let h = Harness::start();
+        assert_eq!(h.ui.get_rows().row_count(), 0);
+        assert!(
+            h.ui.get_status_text().to_lowercase().contains("steam"),
+            "{}",
+            h.ui.get_status_text()
+        );
+    }
+
+    #[test]
+    fn a_launched_tool_streams_its_output_to_the_log() {
+        if !is_child() {
+            return in_fake_home(
+                "a_launched_tool_streams_its_output_to_the_log",
+                "app_launch",
+                None,
+            );
+        }
+        let h = Harness::start();
+        h.select(ALPHA);
+        h.ui.invoke_launch_tool("winecfg".into());
+        assert!(h.ui.get_launch_running());
+        assert_eq!(h.ui.get_status_text(), "Running winecfg...");
+        h.wait_launches();
+        let log = h.log();
+        assert!(log.contains("proton runinprefix winecfg"), "{log}");
+        assert!(log.contains("oops"), "{log}");
+        assert!(!h.ui.get_launch_running());
+        assert!(h.ui.get_log_text().contains("proton runinprefix winecfg"));
+    }
+
+    #[test]
+    fn launch_failures_open_the_error_dialog() {
+        if !is_child() {
+            return in_fake_home(
+                "launch_failures_open_the_error_dialog",
+                "app_launch_errors",
+                None,
+            );
+        }
+        let h = Harness::start();
+
+        h.ui.invoke_launch_tool("winecfg".into());
+        assert!(h.visible(Which::Error));
+        assert!(h.ui.get_dialog_open());
+        assert_eq!(h.error_heading(), "Launch Error");
+        assert_eq!(h.error_message(), "No game selected");
+        assert!(h.log().contains("Launch error: No game selected"));
+
+        // A second failure reuses the open dialog.
+        h.select(BETA);
+        h.ui.invoke_launch_tool("winecfg".into());
+        assert!(h.visible(Which::Error));
+        assert!(
+            h.error_message()
+                .starts_with("Failed to launch winecfg: no Proton directory"),
+            "{}",
+            h.error_message()
+        );
+        h.close_error();
+        assert!(!h.ui.get_dialog_open());
+
+        // Browsing with nothing selected fails the same way.
+        h.ui.invoke_row_pressed(-1);
+        h.ui.invoke_browse();
+        assert_eq!(h.error_message(), "No game selected");
+        assert!(!h.app.borrow().state.browsing);
+
+        // The window manager's close button dismisses as OK does.
+        dispatch_close(&h, Which::Error);
+        assert!(!h.visible(Which::Error));
+    }
+
+    #[test]
+    fn a_failed_file_chooser_is_reported() {
+        if !is_child() {
+            return in_fake_home("a_failed_file_chooser_is_reported", "app_browse", None);
+        }
+        let h = Harness::start();
+        h.select(ALPHA);
+        h.ui.invoke_browse();
+        assert!(h.app.borrow().state.browsing);
+        // Only one chooser at a time.
+        h.ui.invoke_browse();
+        let app = h.app.clone();
+        run_until("the chooser to fail", move || !app.borrow().state.browsing);
+        assert!(h.visible(Which::Error));
+        assert_eq!(h.error_heading(), "File Dialog Error");
+        assert!(
+            h.log()
+                .contains("File dialog error: Failed to open file dialog")
+        );
+    }
+
+    #[test]
+    fn a_picked_executable_runs_in_the_game_prefix_and_is_remembered() {
+        if !is_child() {
+            return in_fake_home(
+                "a_picked_executable_runs_in_the_game_prefix_and_is_remembered",
+                "app_picked",
+                None,
+            );
+        }
+        let h = Harness::start();
+        assert!(h.app.borrow().state.remember_last_dir);
+        h.select(ALPHA);
+        let game = h.app.borrow().state.selected_row().unwrap().to_game();
+        let exe = home().join("Trainers/trainer.exe");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+
+        // A cancelled chooser does nothing.
+        h.app
+            .borrow_mut()
+            .browse_finished(BrowseOutcome::Nothing, game.clone());
+        assert!(!h.visible(Which::Error));
+
+        h.app
+            .borrow_mut()
+            .browse_finished(BrowseOutcome::Picked(exe.clone()), game);
+        let app = h.app.clone();
+        run_until("the launch to start", move || {
+            app.borrow().state.launch_running
+        });
+        assert_eq!(
+            h.ui.get_status_text(),
+            format!("Running {} in Alpha Game...", exe.display())
+        );
+        h.wait_launches();
+        let log = h.log();
+        assert!(
+            log.contains(&format!("proton runinprefix {}", exe.display())),
+            "{log}"
+        );
+        assert_eq!(
+            crate::config::load_last_dir(),
+            Some(exe.parent().unwrap().to_path_buf())
+        );
+
+        // The next chooser starts there; it fails without a portal.
+        h.ui.invoke_browse();
+        let app = h.app.clone();
+        run_until("the chooser to fail", move || !app.borrow().state.browsing);
+
+        // A pick for a game without a prefix cannot launch.
+        h.close_error();
+        let beta = test_game("Beta Game", BETA);
+        let beta = crate::models::Game {
+            proton_dir: String::new(),
+            ..beta
+        };
+        h.app
+            .borrow_mut()
+            .browse_finished(BrowseOutcome::Picked(exe), beta);
+        let app = h.app.clone();
+        run_until("the launch to fail", move || {
+            app.borrow()
+                .error
+                .as_ref()
+                .is_some_and(|d| d.window().is_visible())
+        });
+        assert!(
+            h.error_message().starts_with("Failed to launch: no Proton"),
+            "{}",
+            h.error_message()
+        );
+    }
+
+    #[test]
+    fn unwritable_config_and_state_are_logged_not_fatal() {
+        if !is_child() {
+            // Regular files where the XDG directories should be.
+            let home = crate::test_support::temp_dir("app_unwritable");
+            fake_home(&home);
+            let blocker = home.join("blocker");
+            std::fs::write(&blocker, "").unwrap();
+            run_in_child(
+                "app::tests::unwritable_config_and_state_are_logged_not_fatal",
+                &[
+                    ("HOME", home.as_os_str()),
+                    ("XDG_CONFIG_HOME", blocker.as_os_str()),
+                    ("XDG_STATE_HOME", blocker.as_os_str()),
+                    ("DBUS_SESSION_BUS_ADDRESS", OsStr::new(NO_BUS)),
+                ],
+                &["DISPLAY", "WAYLAND_DISPLAY", "FLATPAK_ID"],
+            );
+            let _ = std::fs::remove_dir_all(&home);
+            return;
+        }
+        let h = Harness::start();
+        h.select(ALPHA);
+        let game = h.app.borrow().state.selected_row().unwrap().to_game();
+        let exe = home().join("trainer.exe");
+        h.app
+            .borrow_mut()
+            .browse_finished(BrowseOutcome::Picked(exe), game);
+        let app = h.app.clone();
+        run_until("the launch to start", move || {
+            app.borrow().state.launch_running
+        });
+        h.wait_launches();
+        assert_eq!(crate::config::load_last_dir(), None);
+
+        h.ui.invoke_open_settings();
+        let settings = h.app.borrow().settings.as_ref().unwrap().clone_strong();
+        settings.invoke_remember_changed(false);
+        assert!(!h.app.borrow().state.remember_last_dir);
+        assert!(
+            h.log()
+                .contains("Settings: remember last directory = false")
+        );
+    }
+
+    #[test]
+    fn the_settings_dialog_persists_the_checkbox() {
+        if !is_child() {
+            return in_fake_home(
+                "the_settings_dialog_persists_the_checkbox",
+                "app_settings",
+                None,
+            );
+        }
+        let h = Harness::start();
+        h.ui.invoke_open_settings();
+        assert!(h.visible(Which::Settings));
+        assert!(h.ui.get_dialog_open());
+        let settings = h.app.borrow().settings.as_ref().unwrap().clone_strong();
+        assert!(settings.get_remember_last_dir());
+
+        settings.invoke_remember_changed(false);
+        assert!(!crate::config::load_config().remember_last_dir);
+        assert!(
+            h.log()
+                .contains("Settings: remember last directory = false")
+        );
+
+        // Opening it again while it shows only focuses it.
+        h.ui.invoke_open_settings();
+        assert!(h.visible(Which::Settings));
+        settings.invoke_ok();
+        assert!(!h.visible(Which::Settings));
+
+        // Reopening reuses the dialog and shows the current value.
+        h.ui.invoke_open_settings();
+        assert!(!settings.get_remember_last_dir());
+        dispatch_close(&h, Which::Settings);
+        assert!(!h.visible(Which::Settings));
+
+        // Without remembering, browsing does not read the last directory.
+        h.select(ALPHA);
+        h.ui.invoke_browse();
+        let app = h.app.clone();
+        run_until("the chooser to fail", move || !app.borrow().state.browsing);
+        let game = h.app.borrow().state.selected_row().unwrap().to_game();
+        h.app
+            .borrow_mut()
+            .browse_finished(BrowseOutcome::Picked(home().join("x/trainer.exe")), game);
+        h.wait_launches();
+        assert_eq!(crate::config::load_last_dir(), None);
+    }
+
+    #[test]
+    fn the_about_dialog_opens_and_closes() {
+        if !is_child() {
+            return in_fake_home("the_about_dialog_opens_and_closes", "app_about", None);
+        }
+        let h = Harness::start();
+        h.ui.invoke_open_about();
+        assert!(h.visible(Which::About));
+        let about = h.app.borrow().about.as_ref().unwrap().clone_strong();
+        assert_eq!(
+            about.get_version(),
+            format!("protonctx v{}", env!("CARGO_PKG_VERSION"))
+        );
+        h.ui.invoke_open_about();
+        assert!(h.visible(Which::About));
+        about.invoke_ok();
+        assert!(!h.visible(Which::About));
+        h.ui.invoke_open_about();
+        assert!(h.visible(Which::About));
+        dispatch_close(&h, Which::About);
+        assert!(!h.visible(Which::About));
+
+        // Exiting and closing the main window quit the event loop.
+        // Each queues a quit, so each returns from a run of the loop.
+        h.ui.invoke_exit_app();
+        slint::run_event_loop().unwrap();
+        h.ui.window().dispatch_event(WindowEvent::CloseRequested);
+        slint::run_event_loop().unwrap();
+    }
+
+    #[test]
+    fn the_shader_cache_is_deleted_after_confirmation() {
+        if !is_child() {
+            return in_fake_home(
+                "the_shader_cache_is_deleted_after_confirmation",
+                "app_cache",
+                None,
+            );
+        }
+        let h = Harness::start();
+        // Nothing selected: nothing to confirm, nothing to commit.
+        h.ui.invoke_delete_shader_cache();
+        assert!(h.app.borrow().delete.is_none());
+        h.app.borrow_mut().commit_delete_shader_cache();
+        assert!(!h.app.borrow().state.deleting_shader_cache);
+
+        h.select(ALPHA);
+        assert!(h.ui.get_cache_exists());
+        let cache = crate::steam::shadercache::shader_cache_dir_for(&steam_root(&home()), ALPHA);
+        h.ui.invoke_delete_shader_cache();
+        assert!(h.visible(Which::Delete));
+        let dialog = h.app.borrow().delete.as_ref().unwrap().0.clone_strong();
+        assert!(dialog.get_message().contains(&cache.display().to_string()));
+        dialog.invoke_no();
+        assert!(!h.visible(Which::Delete));
+        assert!(cache.exists());
+
+        // Confirmed: the dialog locks until the deletion finishes.
+        h.ui.invoke_delete_shader_cache();
+        dialog.invoke_yes();
+        assert!(dialog.get_deleting());
+        assert!(h.app.borrow().state.deleting_shader_cache);
+        dialog.invoke_yes();
+        dialog.invoke_no();
+        assert!(h.visible(Which::Delete), "locked while deleting");
+        let app = h.app.clone();
+        run_until("the deletion", move || {
+            !app.borrow().state.deleting_shader_cache
+        });
+        assert!(!h.visible(Which::Delete));
+        assert!(!cache.exists());
+        assert_eq!(h.ui.get_status_text(), "Shader cache deleted");
+        assert!(!h.ui.get_cache_exists());
+
+        // Nothing left to delete.
+        h.ui.invoke_delete_shader_cache();
+        dialog.invoke_yes();
+        let app = h.app.clone();
+        run_until("the deletion", move || {
+            !app.borrow().state.deleting_shader_cache
+        });
+        assert_eq!(h.ui.get_status_text(), "No shader cache to delete");
+
+        // A failed deletion is shown in the error dialog.
+        h.ui.invoke_delete_shader_cache();
+        if let Some((_, game)) = h.app.borrow_mut().delete.as_mut() {
+            game.library_path = "relative/library".to_string();
+        }
+        dialog.invoke_yes();
+        let app = h.app.clone();
+        run_until("the deletion", move || {
+            !app.borrow().state.deleting_shader_cache
+        });
+        assert!(h.visible(Which::Error));
+        assert_eq!(h.error_heading(), "Shader Cache Error");
+        assert!(!h.visible(Which::Delete));
+
+        dispatch_close(&h, Which::Error);
+        h.ui.invoke_delete_shader_cache();
+        dispatch_close(&h, Which::Delete);
+        assert!(!h.visible(Which::Delete));
+    }
+
+    #[test]
+    fn copying_paths_without_a_clipboard_is_harmless() {
+        if !is_child() {
+            return in_fake_home(
+                "copying_paths_without_a_clipboard_is_harmless",
+                "app_copy",
+                None,
+            );
+        }
+        let h = Harness::start();
+        // Nothing selected: nothing to copy.
+        h.ui.invoke_copy_compatdata();
+        h.ui.invoke_copy_tool_path();
+        h.select(ALPHA);
+        h.ui.invoke_copy_compatdata();
+        h.ui.invoke_copy_tool_path();
+        h.app.borrow_mut().copy(String::new());
+        assert!(h.app.borrow().clipboard.is_none());
+    }
+
+    #[test]
+    fn dialogs_are_parented_only_when_their_x11_window_appears() {
+        // An X display that does not exist: the dialog never gets an X11
+        // window, so parenting retries, then gives up.
+        if !is_child() {
+            return in_fake_home(
+                "dialogs_are_parented_only_when_their_x11_window_appears",
+                "app_x11",
+                Some(":31999"),
+            );
+        }
+        let h = Harness::start();
+        h.ui.invoke_open_about();
+        h.ui.invoke_open_settings();
+        h.ui.invoke_launch_tool("winecfg".into());
+        h.select(ALPHA);
+        h.ui.invoke_delete_shader_cache();
+        // 100 attempts 5 ms apart.
+        run_for(Duration::from_millis(900));
+        assert!(h.app.borrow().parented.borrow().is_empty());
+        // The clipboard cannot reach the display either.
+        h.ui.invoke_copy_tool_path();
+        assert!(h.app.borrow().clipboard.is_none());
+
+        // A dialog dropped while waiting stops the retries.
+        h.app.borrow_mut().about = None;
+        h.ui.invoke_open_about();
+        // A shown window keeps its component alive; hide it first.
+        let about = h.app.borrow_mut().about.take().unwrap();
+        about.hide().unwrap();
+        drop(about);
+        run_for(Duration::from_millis(20));
+    }
+
+    #[test]
+    fn the_log_view_follows_appends_and_trims() {
+        if !is_child() {
+            return in_fake_home("the_log_view_follows_appends_and_trims", "app_log", None);
+        }
+        let h = Harness::start();
+        let lines = h.ui.get_log_lines();
+        assert!(lines > 0);
+        let mut app = h.app.borrow_mut();
+        for i in 0..crate::log_buffer::MAX_LOG_LINES + crate::log_buffer::TRIM_SLACK {
+            app.launch_event(crate::background::LaunchEvent::Line {
+                text: format!("line {i}"),
+            });
+        }
+        app.sync();
+        drop(app);
+        assert_eq!(
+            h.ui.get_log_lines(),
+            i32::try_from(crate::log_buffer::MAX_LOG_LINES).unwrap()
+        );
+        // An unchanged log is not copied again.
+        h.app.borrow_mut().sync();
+    }
+
+    #[test]
+    fn failures_have_a_title_and_a_log_label() {
+        for (failure, title, label) in [
+            (Failure::Launch, "Launch Error", "Launch error"),
+            (
+                Failure::FileDialog,
+                "File Dialog Error",
+                "File dialog error",
+            ),
+            (
+                Failure::ShaderCache,
+                "Shader Cache Error",
+                "Shader cache error",
+            ),
+        ] {
+            assert_eq!(failure.title(), title);
+            assert_eq!(failure.log_label(), label);
+        }
+    }
+
+    #[test]
+    fn a_dropped_app_ignores_callbacks() {
+        let gone: std::rc::Weak<RefCell<App>> = std::rc::Weak::new();
+        let mut called = false;
+        with_app(&gone, |_| called = true);
+        assert!(!called);
+    }
+
+    /// Send the window manager's close request to a dialog.
+    fn dispatch_close(h: &Harness, which: Which) {
+        let app = h.app.borrow();
+        let handle: Box<dyn Fn(WindowEvent)> = match which {
+            Which::About => {
+                let d = app.about.as_ref().unwrap().clone_strong();
+                Box::new(move |e| d.window().dispatch_event(e))
+            }
+            Which::Settings => {
+                let d = app.settings.as_ref().unwrap().clone_strong();
+                Box::new(move |e| d.window().dispatch_event(e))
+            }
+            Which::Error => {
+                let d = app.error.as_ref().unwrap().clone_strong();
+                Box::new(move |e| d.window().dispatch_event(e))
+            }
+            Which::Delete => {
+                let d = app.delete.as_ref().unwrap().0.clone_strong();
+                Box::new(move |e| d.window().dispatch_event(e))
+            }
+        };
+        drop(app);
+        handle(WindowEvent::CloseRequested);
+    }
+}

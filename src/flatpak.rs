@@ -39,13 +39,22 @@ pub fn running_in_flatpak() -> bool {
 
 /// Perform the actual detection (see module docs for the signals used).
 fn detect() -> bool {
+    detect_from(
+        std::path::Path::new("/.flatpak-info"),
+        std::env::var_os("FLATPAK_ID").is_some(),
+    )
+}
+
+/// The decision behind [`detect`], with the metadata file and the `FLATPAK_ID`
+/// check passed in so both signals can be tested outside a sandbox.
+fn detect_from(info_file: &std::path::Path, flatpak_id_set: bool) -> bool {
     // The canonical marker: Flatpak mounts its effective metadata here in every
     // running sandbox.
-    if std::path::Path::new("/.flatpak-info").exists() {
+    if info_file.exists() {
         return true;
     }
     // Fallback signal: `flatpak run` sets this to the app ID.
-    std::env::var_os("FLATPAK_ID").is_some()
+    flatpak_id_set
 }
 
 /// The application ID advertised to the display server for protonctx windows.
@@ -309,8 +318,145 @@ mod tests {
     fn app_id_falls_back_to_native_id() {
         // No entry installed (or missing/empty FLATPAK_ID): use the native ID;
         // the compositor shows its fallback icon, as for any uninstalled app.
-        assert_eq!(app_id_for(false, None, |_| false), "protonctx");
-        assert_eq!(app_id_for(true, None, |_| false), "protonctx");
-        assert_eq!(app_id_for(true, Some(""), |_| false), "protonctx");
+        // One closure for every case, so a single instantiation of the
+        // generic function sees each branch.
+        let none = |_: &str| false;
+        assert_eq!(app_id_for(false, None, none), "protonctx");
+        assert_eq!(app_id_for(true, None, none), "protonctx");
+        assert_eq!(app_id_for(true, Some(""), none), "protonctx");
+        assert_eq!(
+            app_id_for(true, Some("io.example.Id"), none),
+            "io.example.Id"
+        );
+    }
+
+    #[test]
+    fn detection_uses_the_info_file_then_flatpak_id() {
+        let dir = crate::test_support::temp_dir("flatpak_detect");
+        std::fs::create_dir_all(&dir).unwrap();
+        let info = dir.join(".flatpak-info");
+
+        assert!(!detect_from(&info, false));
+        assert!(detect_from(&info, true));
+        std::fs::write(&info, "[Application]\n").unwrap();
+        assert!(detect_from(&info, false));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Write an executable `flatpak-spawn` stand-in into `dir`: it fails for a
+    /// path containing `fail` and otherwise prints a document-portal origin.
+    fn fake_flatpak_spawn(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(dir).unwrap();
+        let script = dir.join("flatpak-spawn");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncase \"$5\" in *fail*) exit 1;; esac\necho \"origin: /mnt/real/t.exe \"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn inside_a_sandbox_the_window_uses_flatpak_id() {
+        use crate::test_support::{is_child, run_in_child};
+        if !is_child() {
+            return run_in_child(
+                "flatpak::tests::inside_a_sandbox_the_window_uses_flatpak_id",
+                &[("FLATPAK_ID", "io.example.Test".as_ref())],
+                &[],
+            );
+        }
+        assert!(running_in_flatpak());
+        assert_eq!(window_app_id(), "io.example.Test");
+    }
+
+    #[test]
+    fn desktop_entries_are_found_in_the_xdg_data_dirs() {
+        use crate::test_support::{is_child, run_in_child, temp_dir};
+        if !is_child() {
+            let dir = temp_dir("flatpak_desktop_entries");
+            let home = dir.join("home");
+            let system = dir.join("system");
+            for (root, id) in [
+                (&home, "io.github.l_raider.protonctx"),
+                (&system, "in.system"),
+            ] {
+                std::fs::create_dir_all(root.join("applications")).unwrap();
+                std::fs::write(root.join("applications").join(format!("{id}.desktop")), "")
+                    .unwrap();
+            }
+            // A relative entry is skipped, as the spec requires.
+            let dirs = format!("relative/share:{}", system.display());
+            run_in_child(
+                "flatpak::tests::desktop_entries_are_found_in_the_xdg_data_dirs",
+                &[
+                    ("XDG_DATA_HOME", home.as_os_str()),
+                    ("XDG_DATA_DIRS", dirs.as_ref()),
+                ],
+                &["FLATPAK_ID"],
+            );
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+        assert!(desktop_entry_installed("io.github.l_raider.protonctx"));
+        assert!(desktop_entry_installed("in.system"));
+        assert!(!desktop_entry_installed("missing"));
+        // Only the Flatpak entry is installed, so a native build follows it.
+        assert_eq!(window_app_id(), "io.github.l_raider.protonctx");
+    }
+
+    #[test]
+    fn desktop_entries_default_to_the_spec_data_dirs() {
+        use crate::test_support::{is_child, run_in_child, temp_dir};
+        if !is_child() {
+            let home = temp_dir("flatpak_default_data_dirs");
+            return run_in_child(
+                "flatpak::tests::desktop_entries_default_to_the_spec_data_dirs",
+                &[("XDG_DATA_HOME", home.as_os_str())],
+                &["XDG_DATA_DIRS"],
+            );
+        }
+        assert!(!desktop_entry_installed(
+            "io.example.not-installed-anywhere"
+        ));
+    }
+
+    #[test]
+    fn doc_paths_resolve_through_the_host_document_portal() {
+        use crate::test_support::{is_child, run_in_child, temp_dir};
+        if !is_child() {
+            let bin = temp_dir("flatpak_resolve_bin");
+            fake_flatpak_spawn(&bin);
+            run_in_child(
+                "flatpak::tests::doc_paths_resolve_through_the_host_document_portal",
+                &[("PATH", bin.as_os_str())],
+                &[],
+            );
+            std::fs::remove_dir_all(&bin).ok();
+            return;
+        }
+        assert_eq!(
+            resolve_host_path("/run/user/1000/doc/abc/t.exe").as_deref(),
+            Some("/mnt/real/t.exe")
+        );
+        // A failed query falls back to the verbatim path.
+        assert_eq!(resolve_host_path("/run/user/1000/doc/fail/t.exe"), None);
+    }
+
+    #[test]
+    fn doc_paths_are_unresolved_without_flatpak_spawn() {
+        use crate::test_support::{is_child, run_in_child, temp_dir};
+        if !is_child() {
+            // An empty search path: `flatpak-spawn` cannot be started.
+            let bin = temp_dir("flatpak_resolve_no_bin");
+            return run_in_child(
+                "flatpak::tests::doc_paths_are_unresolved_without_flatpak_spawn",
+                &[("PATH", bin.as_os_str())],
+                &[],
+            );
+        }
+        assert_eq!(resolve_host_path("/run/user/1000/doc/abc/t.exe"), None);
     }
 }

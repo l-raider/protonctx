@@ -113,10 +113,113 @@ fn working_dir<'a>(picked: &Path, host_exe: &'a Path) -> Option<&'a Path> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{game, is_child, run_in_child, temp_dir};
+
+    /// Write an executable shell script with `body` to `path`.
+    pub(super) fn write_script(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A game under `root` whose `proton` is a stand-in script that echoes its
+    /// arguments, prefix, and working directory.
+    pub(super) fn game_with_fake_proton(root: &Path) -> Game {
+        let proton_dir = root.join("Proton");
+        write_script(
+            &proton_dir.join("proton"),
+            "echo \"$@\"\necho \"prefix=$STEAM_COMPAT_DATA_PATH\"\necho \"cwd=$(pwd)\"",
+        );
+        game(
+            "Fake",
+            42,
+            "proton_9",
+            root.join("lib").to_str().unwrap(),
+            proton_dir.to_str().unwrap(),
+        )
+    }
+
+    /// Wait for a launch and return its stdout.
+    pub(super) fn output_of(launched: LaunchedProcess) -> String {
+        let output = launched.child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    }
+
+    #[test]
+    fn launch_errors_describe_themselves_and_their_source() {
+        use std::error::Error as _;
+        let missing = LaunchError::NoProtonDir;
+        assert_eq!(
+            missing.to_string(),
+            "no Proton directory found for this game (has it been run yet?)"
+        );
+        assert!(missing.source().is_none());
+
+        let spawn = LaunchError::Spawn {
+            path: PathBuf::from("/x/proton"),
+            source: std::io::Error::other("denied"),
+        };
+        assert_eq!(
+            spawn.to_string(),
+            "failed to start process `/x/proton`: denied"
+        );
+        assert_eq!(spawn.source().unwrap().to_string(), "denied");
+    }
+
+    #[test]
+    fn a_tool_launch_needs_a_proton_dir() {
+        let game = game("No Prefix", 1, "", "/lib", "");
+        assert!(matches!(
+            launch_tool(&game, "winecfg"),
+            Err(LaunchError::NoProtonDir)
+        ));
+    }
+
+    #[test]
+    fn tools_and_executables_run_in_the_prefix_on_the_host() {
+        // Outside a sandbox; the setup happens in the child, which owns its
+        // temp dir.
+        if !is_child() {
+            return run_in_child(
+                "launcher::tests::tools_and_executables_run_in_the_prefix_on_the_host",
+                &[],
+                &["FLATPAK_ID"],
+            );
+        }
+        let root = temp_dir("launcher_direct_launch");
+        let game = game_with_fake_proton(&root);
+
+        let launched = launch_tool(&game, "winecfg").unwrap();
+        assert!(launched.command_line.ends_with(&format!(
+            "proton runinprefix winecfg (prefix: {})",
+            root.join("lib/steamapps/compatdata/42").display()
+        )));
+        let output = output_of(launched);
+        assert!(output.starts_with("runinprefix winecfg\n"), "{output}");
+
+        let folder = root.join("Trainer");
+        std::fs::create_dir_all(&folder).unwrap();
+        let exe = resolve_executable(&folder.join("t.exe"));
+        let launched = run_executable(&game, &exe).unwrap();
+        assert!(
+            launched
+                .command_line
+                .ends_with(&format!(", in: {})", folder.display()))
+        );
+        let output = output_of(launched);
+        assert!(
+            output.contains(&format!("cwd={}\n", folder.display())),
+            "{output}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn working_dir_is_the_host_folder_when_the_picked_folder_exists() {
-        let dir = crate::test_support::temp_dir("working_dir");
+        let dir = temp_dir("working_dir");
         std::fs::create_dir_all(&dir).unwrap();
         let picked = dir.join("trainer.exe");
 
@@ -134,11 +237,9 @@ mod tests {
 
     #[test]
     fn a_host_pick_resolves_to_itself_and_its_folder() {
-        // Outside a sandbox nothing needs resolving.
-        if crate::flatpak::running_in_flatpak() {
-            return;
-        }
-        let dir = crate::test_support::temp_dir("resolve_executable");
+        // A path outside the document portal needs no resolving, even in a
+        // sandbox.
+        let dir = temp_dir("resolve_executable");
         std::fs::create_dir_all(&dir).unwrap();
         let picked = dir.join("trainer.exe");
 
@@ -154,8 +255,40 @@ mod tests {
     }
 
     #[test]
+    fn a_portal_pick_in_a_sandbox_resolves_to_its_host_path() {
+        if !is_child() {
+            let bin = temp_dir("launcher_portal_bin");
+            write_script(
+                &bin.join("flatpak-spawn"),
+                "case \"$5\" in *fail*) exit 1;; esac\necho \"origin: /mnt/games/Trainer/t.exe\"",
+            );
+            run_in_child(
+                "launcher::tests::a_portal_pick_in_a_sandbox_resolves_to_its_host_path",
+                &[
+                    ("FLATPAK_ID", "io.example.Test".as_ref()),
+                    ("PATH", bin.as_os_str()),
+                ],
+                &[],
+            );
+            std::fs::remove_dir_all(&bin).ok();
+            return;
+        }
+        // The alias folder is not visible here, so no working directory.
+        assert_eq!(
+            resolve_executable(Path::new("/run/user/1000/doc/abc/t.exe")),
+            Executable {
+                host_path: PathBuf::from("/mnt/games/Trainer/t.exe"),
+                cwd: None,
+            }
+        );
+        // An unresolvable alias is used verbatim.
+        let alias = Path::new("/run/user/1000/doc/fail/t.exe");
+        assert_eq!(resolve_executable(alias).host_path, alias);
+    }
+
+    #[test]
     fn working_dir_is_unset_when_the_folder_is_missing() {
-        let missing = crate::test_support::temp_dir("working_dir_missing").join("t.exe");
+        let missing = temp_dir("working_dir_missing").join("t.exe");
         assert_eq!(working_dir(&missing, &missing), None);
         // A bare file name has no folder to start in.
         assert_eq!(working_dir(Path::new("t.exe"), Path::new("t.exe")), None);

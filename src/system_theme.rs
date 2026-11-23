@@ -77,13 +77,41 @@ pub fn load(preset_mode: Option<bool>) -> LoadedTheme {
         return preset(&AccessibilityPreferences::default(), is_dark);
     }
 
-    let deadline = Instant::now() + THEME_READ_TIMEOUT;
-    let portal = spawn_read("color-scheme-read", portal_prefers_dark);
-    let kde = is_kde(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()).then(|| {
-        spawn_read("system-theme-read", || {
-            SystemTheme::from_system().map_err(|e| e.to_string())
-        })
-    });
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").ok();
+    let read_kde: Option<fn() -> Result<LoadedTheme, String>> =
+        is_kde(desktop.as_deref()).then_some(read_kde_scheme);
+    load_from(
+        portal_prefers_dark,
+        read_kde,
+        native_theme::detect::system_is_dark,
+        THEME_READ_TIMEOUT,
+    )
+}
+
+/// The live KDE scheme's active variant, its mode and the accessibility
+/// preferences, with fonts as the reader resolved them (not yet normalized).
+fn read_kde_scheme() -> Result<LoadedTheme, String> {
+    let system = SystemTheme::from_system().map_err(|e| e.to_string())?;
+    Ok(LoadedTheme {
+        resolved: system.pick(system.mode).clone(),
+        is_dark: system.mode == ColorMode::Dark,
+        prefs: system.accessibility,
+    })
+}
+
+/// [`load`] with its platform reads as parameters: `read_portal` gives the
+/// desktop's light/dark preference, `read_kde` (present on KDE only) the live
+/// scheme, and `system_is_dark` the platform's guess when the portal states
+/// none. The two reads run side by side and are given up after `timeout`.
+fn load_from(
+    read_portal: fn() -> Result<Option<bool>, String>,
+    read_kde: Option<fn() -> Result<LoadedTheme, String>>,
+    system_is_dark: fn() -> bool,
+    timeout: Duration,
+) -> LoadedTheme {
+    let deadline = Instant::now() + timeout;
+    let portal = spawn_read("color-scheme-read", read_portal);
+    let kde = read_kde.map(|read| spawn_read("system-theme-read", read));
     let portal_dark = portal
         .and_then(|read| wait_read(read, deadline))
         .unwrap_or_else(|error| {
@@ -91,29 +119,23 @@ pub fn load(preset_mode: Option<bool>) -> LoadedTheme {
             None
         });
     // The preference, or the platform's own guess without one.
-    let preferred_dark = || portal_dark.unwrap_or_else(native_theme::detect::system_is_dark);
+    let preferred_dark = || portal_dark.unwrap_or_else(system_is_dark);
 
     let Some(kde) = kde else {
         return preset(&AccessibilityPreferences::default(), preferred_dark());
     };
     match kde.and_then(|read| wait_read(read, deadline)) {
-        Ok(system) => {
-            let is_dark = system.mode == ColorMode::Dark;
-            if let Some(want_dark) = preset_mode_over_scheme(portal_dark, is_dark) {
+        Ok(mut scheme) => {
+            if let Some(want_dark) = preset_mode_over_scheme(portal_dark, scheme.is_dark) {
                 eprintln!(
                     "protonctx: the KDE colour scheme is {}, but the desktop prefers {}; using the {FALLBACK_PRESET} preset",
-                    mode_name(is_dark),
+                    mode_name(scheme.is_dark),
                     mode_name(want_dark),
                 );
-                return preset(&system.accessibility, want_dark);
+                return preset(&scheme.prefs, want_dark);
             }
-            let mut resolved = system.pick(system.mode).clone();
-            normalize_resolved_fonts(&mut resolved);
-            LoadedTheme {
-                resolved,
-                is_dark,
-                prefs: system.accessibility,
-            }
+            normalize_resolved_fonts(&mut scheme.resolved);
+            scheme
         }
         Err(error) => {
             eprintln!(
@@ -204,16 +226,27 @@ fn wait_read<T>(
 /// The bundled preset always resolves; should it ever fail, the failure is
 /// reported and the same preset is resolved in the other mode.
 pub fn preset(prefs: &AccessibilityPreferences, is_dark: bool) -> LoadedTheme {
-    let resolve = |is_dark: bool| -> native_theme::Result<ResolvedTheme> {
-        let spec = native_theme::theme::Theme::preset(FALLBACK_PRESET)?;
-        let variant = spec.into_variant(if is_dark {
-            ColorMode::Dark
-        } else {
-            ColorMode::Light
-        })?;
-        variant.resolve_system()
-    };
+    preset_with(prefs, is_dark, resolve_preset)
+}
 
+/// The bundled Breeze preset resolved in dark (`true`) or light mode.
+fn resolve_preset(is_dark: bool) -> native_theme::Result<ResolvedTheme> {
+    let spec = native_theme::theme::Theme::preset(FALLBACK_PRESET)?;
+    let variant = spec.into_variant(if is_dark {
+        ColorMode::Dark
+    } else {
+        ColorMode::Light
+    })?;
+    variant.resolve_system()
+}
+
+/// [`preset`] with the resolution as a parameter, so the fallback to the
+/// other mode can be exercised.
+fn preset_with(
+    prefs: &AccessibilityPreferences,
+    is_dark: bool,
+    resolve: impl Fn(bool) -> native_theme::Result<ResolvedTheme>,
+) -> LoadedTheme {
     let (mut resolved, is_dark) = match resolve(is_dark) {
         Ok(resolved) => (resolved, is_dark),
         Err(error) => {
@@ -249,10 +282,271 @@ mod tests {
     use native_theme::color::Rgba;
     use native_theme::theme::{FontSize, FontStyle, ResolvedFontSpec};
 
+    use std::ffi::OsStr;
+    use std::time::Duration;
+
+    use native_theme::theme::ResolvedTheme;
+
     use super::{
-        AccessibilityPreferences, font_size_at_base_dpi, is_kde, normalize_resolved_fonts,
-        prefers_dark, preset, preset_mode_over_scheme, spawn_read, wait_read,
+        AccessibilityPreferences, LoadedTheme, font_size_at_base_dpi, is_kde, load, load_from,
+        normalize_resolved_fonts, prefers_dark, preset, preset_mode_over_scheme, preset_with,
+        resolve_preset, spawn_read, wait_read,
     };
+    use crate::test_support::{is_child, run_in_child, temp_dir};
+
+    /// Ample time for a read that answers at once.
+    const PROMPT: Duration = Duration::from_secs(10);
+    /// The give-up time for tests of a read that never answers.
+    const STALL: Duration = Duration::from_millis(50);
+
+    /// A platform read that never answers (and so never returns).
+    fn stalled<T>() -> Result<T, String> {
+        loop {
+            std::thread::park();
+        }
+    }
+
+    fn portal_prefers_dark() -> Result<Option<bool>, String> {
+        Ok(Some(true))
+    }
+
+    fn portal_prefers_light() -> Result<Option<bool>, String> {
+        Ok(Some(false))
+    }
+
+    fn portal_states_no_preference() -> Result<Option<bool>, String> {
+        Ok(None)
+    }
+
+    fn portal_unavailable() -> Result<Option<bool>, String> {
+        Err("no portal".to_string())
+    }
+
+    fn platform_guesses_dark() -> bool {
+        true
+    }
+
+    fn platform_guesses_light() -> bool {
+        false
+    }
+
+    type KdeRead = fn() -> Result<LoadedTheme, String>;
+
+    /// Off KDE: no scheme reader runs.
+    const OFF_KDE: Option<KdeRead> = None;
+
+    /// The background that marks a theme as the KDE scheme, not the preset.
+    const SCHEME_BACKGROUND: Rgba = Rgba::rgb(1, 2, 3);
+
+    /// A KDE scheme as the reader hands it over: its own colours, a text
+    /// scaling preference, and fonts resolved at a high display DPI.
+    fn kde_scheme(is_dark: bool) -> LoadedTheme {
+        let mut prefs = AccessibilityPreferences::default();
+        prefs.text_scaling_factor = 1.25;
+        let mut scheme = preset(&prefs, is_dark);
+        scheme.resolved.defaults.background_color = SCHEME_BACKGROUND;
+        scheme.resolved.defaults.font.size = 10.0 * 192.0 / 72.0;
+        scheme.resolved.defaults.mono_font.size = 10.0 * 192.0 / 72.0;
+        scheme
+    }
+
+    fn kde_light_scheme() -> Result<LoadedTheme, String> {
+        Ok(kde_scheme(false))
+    }
+
+    fn kde_dark_scheme() -> Result<LoadedTheme, String> {
+        Ok(kde_scheme(true))
+    }
+
+    fn kde_unreadable() -> Result<LoadedTheme, String> {
+        Err("no kdeglobals".to_string())
+    }
+
+    /// Asserts that `loaded` is the bundled preset in the given mode with
+    /// default preferences.
+    fn assert_default_preset(loaded: &LoadedTheme, is_dark: bool) {
+        let background = if is_dark {
+            Rgba::rgb(0x20, 0x23, 0x26)
+        } else {
+            Rgba::rgb(0xEF, 0xF0, 0xF1)
+        };
+        assert_eq!(loaded.is_dark, is_dark);
+        assert_eq!(loaded.resolved.defaults.background_color, background);
+        assert_eq!(loaded.prefs, AccessibilityPreferences::default());
+    }
+
+    #[test]
+    fn a_preset_mode_forces_the_preset_in_that_mode() {
+        assert_default_preset(&load(Some(true)), true);
+        assert_default_preset(&load(Some(false)), false);
+    }
+
+    #[test]
+    fn off_kde_the_preset_follows_the_portal_preference() {
+        let dark = load_from(portal_prefers_dark, OFF_KDE, platform_guesses_light, PROMPT);
+        assert_default_preset(&dark, true);
+        let light = load_from(portal_prefers_light, OFF_KDE, platform_guesses_dark, PROMPT);
+        assert_default_preset(&light, false);
+    }
+
+    #[test]
+    fn without_a_portal_preference_the_platform_guess_decides() {
+        let silent = load_from(
+            portal_states_no_preference,
+            OFF_KDE,
+            platform_guesses_dark,
+            PROMPT,
+        );
+        assert_default_preset(&silent, true);
+        let failed = load_from(portal_unavailable, OFF_KDE, platform_guesses_light, PROMPT);
+        assert_default_preset(&failed, false);
+        let started = std::time::Instant::now();
+        let stalled = load_from(stalled, OFF_KDE, platform_guesses_dark, STALL);
+        assert_default_preset(&stalled, true);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn on_kde_a_scheme_in_the_preferred_mode_is_used_with_normalized_fonts() {
+        let light = load_from(
+            portal_prefers_light,
+            Some(kde_light_scheme as KdeRead),
+            platform_guesses_dark,
+            PROMPT,
+        );
+        assert!(!light.is_dark);
+        assert_eq!(light.resolved.defaults.background_color, SCHEME_BACKGROUND);
+        assert_eq!(light.resolved.defaults.font.size, 10.0 * 96.0 / 72.0);
+        assert_eq!(light.resolved.defaults.mono_font.size, 10.0 * 96.0 / 72.0);
+        assert_eq!(light.prefs.text_scaling_factor, 1.25);
+
+        // With no stated preference the scheme's own mode stands.
+        let dark = load_from(
+            portal_states_no_preference,
+            Some(kde_dark_scheme as KdeRead),
+            platform_guesses_light,
+            PROMPT,
+        );
+        assert!(dark.is_dark);
+        assert_eq!(dark.resolved.defaults.background_color, SCHEME_BACKGROUND);
+    }
+
+    #[test]
+    fn on_kde_a_scheme_against_the_preference_gives_way_to_the_preset() {
+        let loaded = load_from(
+            portal_prefers_dark,
+            Some(kde_light_scheme as KdeRead),
+            platform_guesses_light,
+            PROMPT,
+        );
+        assert!(loaded.is_dark);
+        assert_eq!(
+            loaded.resolved.defaults.background_color,
+            Rgba::rgb(0x20, 0x23, 0x26)
+        );
+        // The scheme's accessibility preferences still apply.
+        assert_eq!(loaded.prefs.text_scaling_factor, 1.25);
+    }
+
+    #[test]
+    fn on_kde_a_failed_or_stalled_read_falls_back_to_the_preset_in_the_preferred_mode() {
+        let failed = load_from(
+            portal_prefers_dark,
+            Some(kde_unreadable as KdeRead),
+            platform_guesses_light,
+            PROMPT,
+        );
+        assert_default_preset(&failed, true);
+        let unguided = load_from(
+            portal_unavailable,
+            Some(kde_unreadable as KdeRead),
+            platform_guesses_light,
+            PROMPT,
+        );
+        assert_default_preset(&unguided, false);
+        let started = std::time::Instant::now();
+        let stalled = load_from(
+            portal_prefers_light,
+            Some(stalled as KdeRead),
+            platform_guesses_dark,
+            STALL,
+        );
+        assert_default_preset(&stalled, false);
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    /// The real platform reads, isolated from the developer's desktop: no
+    /// session bus, an empty configuration directory, and KDE named as the
+    /// desktop. Whatever the readers make of that, the result is Breeze with
+    /// its 10 pt fonts at the base logical DPI.
+    #[test]
+    fn load_reads_the_platform_without_a_session_bus() {
+        if !is_child() {
+            let config = temp_dir("system_theme_load");
+            std::fs::create_dir_all(&config).unwrap();
+            run_in_child(
+                "system_theme::tests::load_reads_the_platform_without_a_session_bus",
+                &[
+                    ("XDG_CURRENT_DESKTOP", OsStr::new("KDE")),
+                    (
+                        "DBUS_SESSION_BUS_ADDRESS",
+                        OsStr::new("unix:path=/nonexistent/protonctx-test-bus"),
+                    ),
+                    ("XDG_CONFIG_HOME", config.as_os_str()),
+                    ("XDG_CONFIG_DIRS", config.as_os_str()),
+                    ("HOME", config.as_os_str()),
+                ],
+                &["XDG_RUNTIME_DIR"],
+            );
+            std::fs::remove_dir_all(&config).unwrap();
+            return;
+        }
+        let loaded = load(None);
+        assert_eq!(loaded.resolved.defaults.font.size, 10.0 * 96.0 / 72.0);
+        assert_eq!(loaded.resolved.defaults.mono_font.size, 10.0 * 96.0 / 72.0);
+    }
+
+    /// A resolution failure, as the bundled preset could in principle report.
+    fn unresolvable(_is_dark: bool) -> native_theme::Result<ResolvedTheme> {
+        Err(native_theme::theme::Theme::preset("no-such-preset").unwrap_err())
+    }
+
+    fn dark_unresolvable(is_dark: bool) -> native_theme::Result<ResolvedTheme> {
+        if is_dark {
+            unresolvable(is_dark)
+        } else {
+            resolve_preset(is_dark)
+        }
+    }
+
+    #[test]
+    fn a_preset_that_fails_to_resolve_falls_back_to_the_other_mode() {
+        let loaded = preset_with(
+            &AccessibilityPreferences::default(),
+            true,
+            dark_unresolvable,
+        );
+        assert_default_preset(&loaded, false);
+    }
+
+    #[test]
+    #[should_panic(expected = "preset is unusable")]
+    fn a_preset_that_fails_in_both_modes_panics() {
+        preset_with(&AccessibilityPreferences::default(), false, unresolvable);
+    }
+
+    #[test]
+    fn a_reader_that_stops_without_an_answer_is_reported() {
+        let read = spawn_read("test-crashed-read", || -> Result<(), String> {
+            panic!("the reader crashed")
+        })
+        .unwrap();
+        let outcome = wait_read(read, std::time::Instant::now() + PROMPT);
+        assert_eq!(
+            outcome,
+            Err("the platform reader stopped unexpectedly".to_string())
+        );
+    }
 
     #[test]
     fn the_portal_color_scheme_maps_to_a_mode() {
@@ -276,11 +570,7 @@ mod tests {
 
     #[test]
     fn a_stalled_read_gives_up_at_the_deadline() {
-        let read = spawn_read("test-stalled-read", || {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            Ok(())
-        })
-        .unwrap();
+        let read = spawn_read("test-stalled-read", stalled::<()>).unwrap();
         let started = std::time::Instant::now();
         let deadline = started + std::time::Duration::from_millis(50);
         assert!(wait_read(read, deadline).is_err());
@@ -326,7 +616,8 @@ mod tests {
     }
 
     /// The pinned contract: at a display DPI of 192, `native-theme` resolves
-    /// KDE's 10 pt body and mono fonts to 26.67 logical px; normalization
+    /// KDE's 10 pt body and mono fonts to 26.67 logical px, rounded to 27 as
+    /// Qt rounds font pixel sizes; normalization
     /// re-derives them at the base logical DPI so the window scale factor is
     /// the only display-scale multiplier left.
     #[test]
@@ -335,7 +626,7 @@ mod tests {
             ColorScheme=BreezeLight\n\
             font=Noto Sans,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1\n\
             fixed=Hack,10,-1,5,400,0,0,0,0,0,0,0,0,0,0,1\n\
-            [Colors:Header]\n\
+            [Colors:Button]\n\
             BackgroundNormal=41,44,48\n";
 
         let (reader, _, _) = native_theme::kde::from_kde_content_pure(KDE_INI, Some(192.0))
@@ -356,10 +647,11 @@ mod tests {
             })
             .expect("the merged KDE variant must validate");
 
-        assert_eq!(resolved.defaults.font.size, 10.0 * 192.0 / 72.0);
-        assert_eq!(resolved.defaults.mono_font.size, 10.0 * 192.0 / 72.0);
-        // The toolbar's Header source, distinct from the popup's Window
-        // source.
+        // 26.67 px, rounded to a whole pixel as Qt rounds font sizes.
+        assert_eq!(resolved.defaults.font.size, 27.0);
+        assert_eq!(resolved.defaults.mono_font.size, 27.0);
+        // The table header's Button source, distinct from the popup's
+        // Window source.
         assert_eq!(resolved.list.header_background, Rgba::rgb(41, 44, 48));
 
         normalize_resolved_fonts(&mut resolved);

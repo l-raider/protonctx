@@ -312,6 +312,41 @@ mod tests {
     }
 
     #[test]
+    fn status_counts_zero_and_one_game() {
+        let found = |names: &[(&str, u32)]| LoadOutcome::Found {
+            rows: names
+                .iter()
+                .map(|(name, id)| GameRow::from_game(&test_game(name, *id)))
+                .collect(),
+            warnings: Vec::new(),
+        };
+        let (_, status, _) = discovery_outcome(found(&[]), 0, ColumnSort::Ascending);
+        assert_eq!(status, "No games found");
+        let (_, status, _) = discovery_outcome(found(&[("Solo", 1)]), 0, ColumnSort::Ascending);
+        assert_eq!(status, "1 game loaded");
+    }
+
+    #[test]
+    fn refresh_notes_the_flatpak_sandbox() {
+        use crate::test_support::{is_child, run_in_child};
+        if !is_child() {
+            return run_in_child(
+                "state::tests::refresh_notes_the_flatpak_sandbox",
+                &[("FLATPAK_ID", "io.example.Test".as_ref())],
+                &[],
+            );
+        }
+        let mut state = State::new(true);
+        assert!(state.begin_refresh());
+        assert!(
+            state
+                .log
+                .text()
+                .contains("] Flatpak environment detected\n")
+        );
+    }
+
+    #[test]
     fn header_click_toggles_two_state_sort() {
         let mut state = state_with(&[("Broforce", 274190), ("Castle Crashers", 204360)]);
         let mut click = |column, sort, ids: &[u32]| {

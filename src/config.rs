@@ -265,4 +265,123 @@ mod tests {
         assert!(hex_decode("abc").is_none());
         assert_eq!(hex_decode("0a0b").unwrap(), vec![0x0a, 0x0b]);
     }
+
+    #[test]
+    fn hex_decode_accepts_upper_case_and_rejects_non_hex_digits() {
+        assert_eq!(hex_decode("0AfF").unwrap(), vec![0x0a, 0xff]);
+        assert!(hex_decode("zz").is_none());
+        assert!(hex_decode("0g").is_none());
+        // A malformed `hex:` value is kept as a plain path.
+        assert_eq!(decode_dir("hex:zz"), PathBuf::from("hex:zz"));
+    }
+
+    #[test]
+    fn config_and_state_round_trip_under_the_xdg_dirs() {
+        use crate::test_support::{is_child, run_in_child, temp_dir};
+        if !is_child() {
+            let dir = temp_dir("config_round_trip");
+            let config = dir.join("config");
+            let state = dir.join("state");
+            run_in_child(
+                "config::tests::config_and_state_round_trip_under_the_xdg_dirs",
+                &[
+                    ("XDG_CONFIG_HOME", config.as_os_str()),
+                    ("XDG_STATE_HOME", state.as_os_str()),
+                ],
+                &[],
+            );
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        }
+        let config = PathBuf::from(std::env::var_os("XDG_CONFIG_HOME").unwrap());
+        let state = PathBuf::from(std::env::var_os("XDG_STATE_HOME").unwrap());
+        let config_file = config.join("protonctx/config.json");
+        let state_file = state.join("protonctx/state.json");
+        assert_eq!(config_path(), Some(config_file.clone()));
+        assert_eq!(state_path(), Some(state_file.clone()));
+
+        // Nothing saved yet: defaults.
+        assert!(load_config().remember_last_dir);
+        assert_eq!(load_last_dir(), None);
+
+        save_config(&AppConfig {
+            remember_last_dir: false,
+        })
+        .unwrap();
+        assert!(!load_config().remember_last_dir);
+        // A corrupt file falls back to the defaults.
+        std::fs::write(&config_file, "not json").unwrap();
+        assert!(load_config().remember_last_dir);
+
+        let picked = Path::new("/mnt/games/Trainer");
+        save_last_dir(picked).unwrap();
+        assert_eq!(load_last_dir().as_deref(), Some(picked));
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let raw = PathBuf::from(std::ffi::OsString::from_vec(b"/mnt/\xFFdir".to_vec()));
+            save_last_dir(&raw).unwrap();
+            assert_eq!(load_last_dir(), Some(raw));
+        }
+        // An empty or corrupt entry reads as unset.
+        std::fs::write(&state_file, r#"{"last_dir":""}"#).unwrap();
+        assert_eq!(load_last_dir(), None);
+        std::fs::write(&state_file, "not json").unwrap();
+        assert_eq!(load_last_dir(), None);
+        // No temp files are left behind by the atomic writes.
+        assert_eq!(
+            std::fs::read_dir(config.join("protonctx")).unwrap().count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_dir(state.join("protonctx")).unwrap().count(),
+            1
+        );
+    }
+
+    #[test]
+    fn nothing_resolves_without_home_or_xdg_dirs() {
+        use crate::test_support::{is_child, run_in_child};
+        if !is_child() {
+            return run_in_child(
+                "config::tests::nothing_resolves_without_home_or_xdg_dirs",
+                &[],
+                &["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME"],
+            );
+        }
+        assert_eq!(config_path(), None);
+        assert_eq!(state_path(), None);
+        assert!(load_config().remember_last_dir);
+        assert_eq!(load_last_dir(), None);
+        let error = save_config(&AppConfig::default()).unwrap_err();
+        assert_eq!(error.to_string(), "could not resolve config directory");
+        let error = save_last_dir(Path::new("/tmp")).unwrap_err();
+        assert_eq!(error.to_string(), "could not resolve state directory");
+    }
+
+    #[test]
+    fn write_atomic_reports_failures_and_cleans_up() {
+        let dir = crate::test_support::temp_dir("config_write_atomic");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The parent is a file, so it cannot be created as a directory.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, "").unwrap();
+        assert!(write_atomic(&blocker.join("config.json"), "{}").is_err());
+
+        // The target is a non-empty directory: the rename fails and the temp
+        // file is removed again.
+        let target = dir.join("target.json");
+        std::fs::create_dir_all(target.join("inner")).unwrap();
+        assert!(write_atomic(&target, "{}").is_err());
+        let names: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+
+        // A path with no parent: the temp file cannot be created at the root.
+        assert!(write_atomic(Path::new("/"), "{}").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

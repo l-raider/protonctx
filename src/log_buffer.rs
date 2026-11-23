@@ -131,4 +131,22 @@ mod tests {
         assert!(log.text().is_empty());
         assert_eq!(log.line_count(), 0);
     }
+
+    #[test]
+    fn revision_and_trimmed_total_track_changes() {
+        let mut log = LogBuffer::default();
+        assert_eq!(log.revision(), 0);
+        log.append("one");
+        assert_eq!(log.revision(), 1);
+        log.clear();
+        assert_eq!(log.revision(), 2);
+        assert_eq!(log.trimmed_total(), 0);
+
+        let mut removed = 0;
+        for line in 0..=(MAX_LOG_LINES + TRIM_SLACK) {
+            removed += log.append(&format!("line {line}"));
+        }
+        assert!(removed > 0);
+        assert_eq!(log.trimmed_total(), removed);
+    }
 }

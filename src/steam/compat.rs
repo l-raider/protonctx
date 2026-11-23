@@ -696,4 +696,65 @@ mod tests {
         assert_eq!(compat_tool_for_app(&map, 274190, true), "");
         assert_eq!(compat_tool_for_app(&map, 274190, false), "");
     }
+
+    #[test]
+    fn non_numbered_names_join_their_words() {
+        for (name, internal) in [
+            // Not "Proton <version>": the first word differs, or there is no version.
+            ("ProtonGE 9.0", "protonge_9.0"),
+            ("Proton", "proton"),
+            // A version with a non-numeric or empty part is not a release number.
+            ("Proton 9.beta", "proton_9.beta"),
+            ("Proton .5", "proton_.5"),
+        ] {
+            assert_eq!(builtin_internal_name(name), internal, "{name}");
+        }
+    }
+
+    #[test]
+    fn missing_config_vdf_is_an_empty_map() {
+        let dir = crate::test_support::temp_dir("compat_missing");
+        assert!(compat_tool_map(&dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn mapping_under_a_lowercase_valve_key_is_read() {
+        // Entries that are not an object, or have no tool name, are skipped.
+        let vdf = r#""InstallConfigStore"
+{
+	"Software"
+	{
+		"valve"
+		{
+			"Steam"
+			{
+				"CompatToolMapping"
+				{
+					"274190"
+					{
+						"name"		"proton_experimental"
+					}
+					"730"		"proton_hotfix"
+					"440"
+					{
+						"priority"		"250"
+					}
+				}
+			}
+		}
+	}
+}"#;
+
+        let dir = crate::test_support::temp_dir("compat_lowercase");
+        std::fs::create_dir_all(dir.join("config")).unwrap();
+        std::fs::write(dir.join("config").join("config.vdf"), vdf).unwrap();
+
+        let map = compat_tool_map(&dir).unwrap();
+        assert_eq!(
+            map,
+            HashMap::from([("274190".to_string(), "proton_experimental".to_string())])
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
