@@ -9,6 +9,8 @@ selected game's Proton prefix. The UI is built with [Slint](https://slint.dev/) 
 software renderer and follows the KDE colour scheme and fonts — no Qt or C++ toolchain
 is required to build it.
 
+![protonctx screenshot](docs/screenshots/protonctx-v1.5.3.png)
+
 ## Features
 
 - Lists installed Steam games across **all** Steam library folders.
