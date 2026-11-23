@@ -632,3 +632,49 @@ fn the_wheel_does_not_scroll_under_an_open_dialog() {
     click(window, x, y, PointerEventButton::Left);
     assert_eq!(calls.take(), ["row 0"]);
 }
+
+/// A long error message scrolled down does not carry its scroll position
+/// over to the next message, in an open dialog or a reshown one.
+#[test]
+fn a_new_error_message_starts_at_its_first_line() {
+    let _platform = platform();
+    let tokens = crate::theme::build(&crate::system_theme::preset(&Default::default(), false));
+    let dialog = ErrorDialog::new().unwrap();
+    crate::ui::apply_theme(&dialog, &tokens);
+    let long = |tag: &str| {
+        (1..=12)
+            .map(|i| format!("{tag} line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    dialog.set_message(long("FIRST").into());
+    dialog.invoke_focus_default();
+    dialog.show().unwrap();
+    let window = dialog.window();
+    window.set_size(slint::LogicalSize::new(500.0, 130.0));
+    let scroll_down = || {
+        for _ in 0..10 {
+            pointer(window, 200.0, 40.0);
+            window.dispatch_event(WindowEvent::PointerScrolled {
+                position: LogicalPosition::new(200.0, 40.0),
+                delta_x: 0.0,
+                delta_y: -120.0,
+            });
+        }
+        assert!(dialog.get_message_offset() > 0.0, "the message scrolls");
+    };
+
+    // Replaced while open.
+    scroll_down();
+    dialog.set_message(long("SECOND").into());
+    // `changed` handlers run before the next frame.
+    slint::platform::update_timers_and_animations();
+    assert_eq!(dialog.get_message_offset(), 0.0);
+
+    // Hidden, then shown again with the same text, as the app reuses it.
+    scroll_down();
+    dialog.hide().unwrap();
+    dialog.invoke_focus_default();
+    dialog.show().unwrap();
+    assert_eq!(dialog.get_message_offset(), 0.0);
+}

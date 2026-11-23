@@ -174,10 +174,20 @@ export component ErrorDialog inherits DialogWindow {
     width: 500px;
     height: 130px;
     in property <string> message;
+    // How far the message is scrolled (read by the tests).
+    out property <length> message-offset: -message-area.offset-y;
     callback ok();
     forward-focus: ok-button;
+    // Called before every showing: a reused dialog opens at the top of its
+    // message, as a new one does.
     public function focus-default() {
+        message-area.offset-y = 0;
         ok-button.focus();
+    }
+    // A new message starts at its first line, which says what failed, also
+    // when it replaces one in a dialog that is still open.
+    changed message => {
+        message-area.offset-y = 0;
     }
     dismiss => {
         root.ok();
