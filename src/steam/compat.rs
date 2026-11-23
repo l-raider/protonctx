@@ -191,7 +191,13 @@ pub fn compat_tool_map(steam_root: &Path) -> Result<HashMap<String, String>, Ste
         let Some(tool_obj) = value.as_obj() else {
             continue;
         };
-        if let Some(name) = tool_obj.get("name").and_then(|v| v.as_str()) {
+        // An empty name selects no tool (an entry left behind once a forced
+        // tool is unset), so the app falls back to the default.
+        if let Some(name) = tool_obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|name| !name.is_empty())
+        {
             map.insert(app_id.to_string(), name.to_string());
         }
     }
@@ -772,6 +778,49 @@ mod tests {
 
         let error = compat_tool_map(&root).unwrap_err().to_string();
         assert!(error.contains("config.vdf: Parse error"), "{error}");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A per-app entry with an empty tool name does not hide the global
+    /// default.
+    #[test]
+    fn an_empty_per_app_tool_name_falls_back_to_the_default() {
+        let root = crate::test_support::temp_dir("compat_empty_name");
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        std::fs::write(
+            root.join("config").join("config.vdf"),
+            r#""InstallConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"CompatToolMapping"
+				{
+					"0"
+					{
+						"name"		"proton_experimental"
+					}
+					"730"
+					{
+						"name"		""
+						"config"		""
+						"priority"		"250"
+					}
+				}
+			}
+		}
+	}
+}"#,
+        )
+        .unwrap();
+
+        let map = compat_tool_map(&root).unwrap();
+        assert!(!map.contains_key("730"), "{map:?}");
+        assert_eq!(compat_tool_for_app(&map, 730, true), "proton_experimental");
 
         std::fs::remove_dir_all(&root).ok();
     }
