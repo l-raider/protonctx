@@ -114,6 +114,10 @@ pub fn stream_pipe<R: std::io::Read + Send + 'static>(
     }
 }
 
+/// The longest line [`read_lines`] buffers; a longer one is passed on in
+/// pieces of this size.
+const MAX_LINE: usize = 8 * 1024;
+
 /// Read `reader` to the end and pass each line to `emit`, stopping early
 /// when `emit` returns `false`.
 ///
@@ -123,22 +127,37 @@ pub fn stream_pipe<R: std::io::Read + Send + 'static>(
 /// instead of failing: stopping would close the pipe's read end, losing the
 /// rest of the output and breaking the child's next write. Only a real I/O
 /// error ends the read early; `read_until` already retries interrupted reads.
+///
+/// Output without newlines (`\r`-updated progress, binary data) is cut every
+/// [`MAX_LINE`] bytes, so it neither grows without bound nor waits for the
+/// exit to show. A line ending just after a cut adds no empty line.
 fn read_lines(
     reader: impl std::io::Read,
     mut emit: impl FnMut(String) -> bool,
 ) -> std::io::Result<()> {
-    use std::io::BufRead;
+    use std::io::{BufRead, Read};
     let mut reader = std::io::BufReader::new(reader);
     let mut buf = Vec::new();
+    // Whether the last piece was cut from a longer line.
+    let mut cut = false;
     loop {
         buf.clear();
-        if reader.read_until(b'\n', &mut buf)? == 0 {
+        let limit = u64::try_from(MAX_LINE).unwrap_or(u64::MAX);
+        if (&mut reader).take(limit).read_until(b'\n', &mut buf)? == 0 {
             return Ok(());
         }
+        // A full piece with no newline: the line goes on past it.
+        let full = buf.len() == MAX_LINE && !buf.ends_with(b"\n");
         let line = match buf.strip_suffix(b"\n") {
             Some(line) => line.strip_suffix(b"\r").unwrap_or(line),
+            // A `\r` at the cut may be half of a `\r\n`.
+            None if full => buf.strip_suffix(b"\r").unwrap_or(&buf),
             None => &buf,
         };
+        let was_cut = std::mem::replace(&mut cut, full);
+        if was_cut && line.is_empty() {
+            continue;
+        }
         if !emit(String::from_utf8_lossy(line).into_owned()) {
             return Ok(());
         }
@@ -476,5 +495,44 @@ mod tests {
         })
         .unwrap();
         assert_eq!(lines, ["one", "two"]);
+    }
+
+    /// Output without newlines is passed on in bounded pieces as it arrives,
+    /// not held until the exit; a line ending right after a cut, even a
+    /// `\r\n` split by it, adds no empty line.
+    #[test]
+    fn long_lines_are_cut_into_bounded_pieces() {
+        use super::MAX_LINE;
+        let collect = |input: &[u8]| {
+            let mut lines = Vec::new();
+            read_lines(input, |line| {
+                lines.push(line);
+                true
+            })
+            .unwrap();
+            lines
+        };
+
+        // \r-updated progress with no newline at all.
+        let progress = b"progress 42%\r".repeat(MAX_LINE / 4);
+        let lines = collect(&progress);
+        assert!(lines.len() >= 4, "{}", lines.len());
+        assert!(lines.iter().all(|line| line.len() <= MAX_LINE));
+
+        // A line exactly one piece long, ended by `\n` or by a split `\r\n`.
+        let mut exact = vec![b'x'; MAX_LINE];
+        exact.extend_from_slice(b"\nnext\n");
+        assert_eq!(collect(&exact), ["x".repeat(MAX_LINE), "next".to_string()]);
+        let mut split = vec![b'y'; MAX_LINE - 1];
+        split.extend_from_slice(b"\r\nnext\n");
+        assert_eq!(
+            collect(&split),
+            ["y".repeat(MAX_LINE - 1), "next".to_string()]
+        );
+
+        // A longer line continues in the next piece.
+        let mut long = vec![b'z'; MAX_LINE + 3];
+        long.push(b'\n');
+        assert_eq!(collect(&long), ["z".repeat(MAX_LINE), "zzz".to_string()]);
     }
 }
