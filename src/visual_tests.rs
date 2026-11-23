@@ -560,3 +560,39 @@ fn a_resize_grip_drag_follows_the_pointer() {
     drag(grip + 30.0, 40, -1.0);
     assert_eq!(app_id_start(), start - 10, "a slow drag left");
 }
+
+/// A message taller than the error dialog scrolls instead of pushing the OK
+/// button out of the fixed-size window.
+#[test]
+fn a_long_error_message_keeps_the_ok_button_in_the_window() {
+    let platform = platform();
+    let tokens = crate::theme::build(&crate::system_theme::preset(&Default::default(), false));
+    let dialog = ErrorDialog::new().unwrap();
+    crate::ui::apply_theme(&dialog, &tokens);
+    let calls = Rc::new(Calls::default());
+    let c = calls.clone();
+    dialog.on_ok(move || c.push("ok"));
+    dialog.set_message("Failed to delete shader cache: one line".into());
+    dialog.show().unwrap();
+    let window = dialog.window();
+    window.set_size(slint::LogicalSize::new(500.0, 130.0));
+
+    // Where the OK button is, with a short message.
+    let ok = (60..130)
+        .rev()
+        .flat_map(|y| (300..500).rev().map(move |x| (x as f32, y as f32)))
+        .find(|&(x, y)| {
+            click(window, x, y, PointerEventButton::Left);
+            calls.take() == ["ok"]
+        })
+        .expect("the OK button is in the window");
+
+    let stderr: Vec<String> = (1..=8)
+        .map(|i| format!("rm: cannot remove '/home/u/.local/share/Steam/steamapps/shadercache/274190/fozpipelinesv6/file{i}': Permission denied"))
+        .collect();
+    dialog.set_message(format!("Failed to delete shader cache: {}", stderr.join("\n")).into());
+    let adapter = platform.windows.borrow().last().unwrap().clone();
+    save(&adapter, 500, 130, "slint-dialog-long-error");
+    click(window, ok.0, ok.1, PointerEventButton::Left);
+    assert_eq!(calls.take(), ["ok"], "the OK button stays where it was");
+}

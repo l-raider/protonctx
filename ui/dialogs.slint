@@ -192,9 +192,9 @@ export component ErrorDialog inherits DialogWindow {
         HorizontalLayout {
             vertical-stretch: 1;
             spacing: Theme.rem(5);
-            alignment: start;
             // Qt's filled danger circle with a white cross.
             VerticalLayout {
+                horizontal-stretch: 0;
                 alignment: start;
                 Rectangle {
                     width: 56px;
@@ -208,9 +208,26 @@ export component ErrorDialog inherits DialogWindow {
                     }
                 }
             }
-            BodyText {
+            // A message taller than the fixed window (a host command's
+            // stderr) scrolls, keeping the OK button in the window.
+            message-area := ScrollArea {
                 horizontal-stretch: 1;
-                text: root.message;
+                content-height: measure.preferred-height;
+                BodyText {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: self.preferred-height;
+                    text: root.message;
+                }
+                // The text's height at its width beside a scroll bar: with
+                // the bar shown it is exact, and without it the text, wider,
+                // is no taller (measuring the shown text would loop).
+                measure := BodyText {
+                    visible: false;
+                    width: message-area.width - Theme.scrollbar-width;
+                    text: root.message;
+                }
             }
         }
         HorizontalLayout {
