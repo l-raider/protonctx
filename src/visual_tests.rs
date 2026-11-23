@@ -596,3 +596,39 @@ fn a_long_error_message_keeps_the_ok_button_in_the_window() {
     click(window, ok.0, ok.1, PointerEventButton::Left);
     assert_eq!(calls.take(), ["ok"], "the OK button stays where it was");
 }
+
+/// While a dialog is open the main window ignores the wheel as it ignores
+/// clicks: the table stays where it was.
+#[test]
+fn the_wheel_does_not_scroll_under_an_open_dialog() {
+    let _platform = platform();
+    let tokens = crate::theme::build(&crate::system_theme::preset(&Default::default(), true));
+    let main = MainWindow::new().unwrap();
+    crate::ui::apply_theme(&main, &tokens);
+    let many: Vec<GameRowData> = std::iter::repeat_with(rows).take(10).flatten().collect();
+    main.set_rows(slint::ModelRc::new(slint::VecModel::from(many)));
+    main.show().unwrap();
+    let window = main.window();
+    window.set_size(slint::LogicalSize::new(760.0, 520.0));
+    let calls = Rc::new(Calls::default());
+    let c = calls.clone();
+    main.on_row_pressed(move |row| c.push(format!("row {row}")));
+
+    // The first row, below the toolbar and the table header.
+    let (x, y) = (200.0, 33.0 + 28.0 + 14.0);
+    main.set_dialog_open(true);
+    for _ in 0..10 {
+        pointer(window, x, y);
+        window.dispatch_event(WindowEvent::PointerScrolled {
+            position: LogicalPosition::new(x, y),
+            delta_x: 0.0,
+            delta_y: -120.0,
+        });
+    }
+    click(window, x, y, PointerEventButton::Left);
+    assert_eq!(calls.take(), Vec::<String>::new(), "clicks are swallowed");
+
+    main.set_dialog_open(false);
+    click(window, x, y, PointerEventButton::Left);
+    assert_eq!(calls.take(), ["row 0"]);
+}

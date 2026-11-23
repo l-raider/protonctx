@@ -536,6 +536,11 @@ export component MainWindow inherits Window {
         }
     }
 
-    // While a dialog is open, an invisible layer swallows the mouse.
-    if root.dialog-open: TouchArea { }
+    // While a dialog is open, an invisible layer swallows the mouse: clicks
+    // and the wheel, which would otherwise scroll the views underneath.
+    if root.dialog-open: TouchArea {
+        scroll-event(event) => {
+            accept
+        }
+    }
 }
