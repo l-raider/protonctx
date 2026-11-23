@@ -194,22 +194,21 @@ fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
     // Write, then flush to disk *before* renaming: without the `sync_all` the
     // rename could be persisted ahead of the data on a crash, leaving an empty or
     // truncated file behind — exactly the corruption the atomic rename avoids.
-    {
+    let write = || -> std::io::Result<()> {
         use std::io::Write;
         let mut file = std::fs::File::create(&tmp)?;
         file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-    }
+        file.sync_all()
+    };
     // Atomically replace the target; `rename` is atomic on POSIX when src and dst
     // share a filesystem (guaranteed here since the temp file is a sibling).
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Best-effort cleanup of the temp file on failure.
-            let _ = std::fs::remove_file(&tmp);
-            Err(e)
-        }
+    let written = write().and_then(|()| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        // Best-effort cleanup of the temp file, whichever step failed (a full
+        // disk fails the write or the sync, not only the rename).
+        let _ = std::fs::remove_file(&tmp);
     }
+    written
 }
 
 #[cfg(test)]
@@ -383,5 +382,51 @@ mod tests {
         assert!(write_atomic(Path::new("/"), "{}").is_err());
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A write that fails part-way (here: a file size limit, as a full disk
+    /// would) leaves no temp file behind.
+    #[test]
+    fn a_failed_write_leaves_no_temp_file() {
+        const DIR: &str = "PROTONCTX_TEST_WRITE_DIR";
+        if let Some(dir) = std::env::var_os(DIR) {
+            let dir = std::path::PathBuf::from(dir);
+            let error = write_atomic(&dir.join("config.json"), &"x".repeat(4096)).unwrap_err();
+            eprintln!("write failed as intended: {error}");
+            let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+            assert!(left.is_empty(), "{left:?}");
+            return;
+        }
+        // Re-run this test limited to 16-byte files, with SIGXFSZ ignored so
+        // the write fails instead of killing the process.
+        if std::process::Command::new("prlimit")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipped: prlimit is not installed");
+            return;
+        }
+        let dir = crate::test_support::temp_dir("config_write_limit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = std::process::Command::new("sh")
+            .args(["-c", "trap '' XFSZ; exec prlimit --fsize=16 \"$@\"", "sh"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "config::tests::a_failed_write_leaves_no_temp_file",
+                "--exact",
+                "--nocapture",
+            ])
+            .env(DIR, &dir)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{stderr}"
+        );
+        assert!(stderr.contains("write failed as intended"), "{stderr}");
     }
 }
