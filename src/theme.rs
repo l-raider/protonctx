@@ -117,8 +117,9 @@ pub struct AppTokens {
     /// View background (`QPalette::Base`): the log pane and list fill.
     /// gpui-component's `muted`, which Breeze paints with the view colour.
     pub muted: Color,
-    /// The table header (and toolbar) fill: KDE's Button colour set, which
-    /// Breeze paints table headers with.
+    /// The toolbar and table header fill: KDE's Header colour set
+    /// (`toolbar.background_color`; native-theme's `list.header_background`
+    /// is the Button set, a shade brighter than the toolbar).
     pub header: Color,
     /// Header text.
     pub header_foreground: Color,
@@ -302,8 +303,8 @@ fn tokens_for(loaded: &LoadedTheme) -> AppTokens {
         background,
         foreground,
         muted: view,
-        header: to_color(r.list.header_background),
-        header_foreground: to_color(r.list.header_font.color),
+        header: to_color(r.toolbar.background_color),
+        header_foreground: to_color(r.toolbar.font.color),
         list_background: to_color(r.list.background_color),
         alternate_row: to_color(r.list.alternate_row_background),
         list_foreground: to_color(r.list.item_font.color),
@@ -384,7 +385,7 @@ mod tests {
         assert!(loaded.is_dark);
         assert_close(t.background, hex(0x202326), "window background");
         assert_close(t.muted, hex(0x141618), "view / muted");
-        // Breeze paints table headers with the Button colour set.
+        // Stock Breeze Dark's Header colour set.
         assert_close(t.header, hex(0x292C30), "header");
         assert_close(t.alternate_row, hex(0x1D1F22), "alternate row");
         assert_close(t.foreground, hex(0xFCFCFC), "text");
@@ -508,6 +509,18 @@ mod tests {
             Color::from_rgb(0.5, 1.0, 0.5),
             "green",
         );
+    }
+
+    #[test]
+    fn header_follows_the_header_colour_set_not_the_button_set() {
+        // A scheme whose Header set matches the window and whose Button set
+        // is brighter (as gpc.local's): the toolbar and table header take
+        // the Header set, as protonctx 1.5.3 did.
+        let mut loaded = preset(&native_theme::AccessibilityPreferences::default(), true);
+        loaded.resolved.toolbar.background_color = native_theme::color::Rgba::rgb(32, 35, 38);
+        loaded.resolved.list.header_background = native_theme::color::Rgba::rgb(41, 44, 48);
+        let t = build(&loaded);
+        assert_close(t.header, hex(0x202326), "header");
     }
 
     #[test]
